@@ -6636,6 +6636,9 @@ def _file_raw_target(session, sid: str, rel: str) -> Path | None:
 # ─── /api/folder/download ───────────────────────────────────────────────────
 # Configurable caps. Match the HERMES_WEBUI_MAX_UPLOAD_MB style used elsewhere
 # (api/config.py) so operators have one consistent env-var convention.
+# Bound on per-request wall-clock and bandwidth, not RSS. The zip streams
+# straight into handler.wfile, so peak memory is the per-file read buffer
+# inside zipfile, not the cap value.
 def _folder_zip_max_bytes() -> int:
     try:
         mb = int(os.getenv("HERMES_WEBUI_FOLDER_ZIP_MAX_MB", "1024"))
