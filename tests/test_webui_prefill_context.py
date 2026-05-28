@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import types
 from pathlib import Path
 
 
@@ -209,10 +210,11 @@ def test_webui_session_context_adds_gateway_like_metadata(monkeypatch, tmp_path)
         def __truediv__(self, name):
             return gateway_state if name == "gateway_state.json" else tmp_path / name
 
-    import hermes_constants
-
-    monkeypatch.setattr(hermes_constants, "get_hermes_home", lambda: FakeHome())
-    monkeypatch.setattr(hermes_constants, "display_hermes_home", lambda: "/tmp/hermes-test-home")
+    fake_constants = types.SimpleNamespace(
+        get_hermes_home=lambda: FakeHome(),
+        display_hermes_home=lambda: "/tmp/hermes-test-home",
+    )
+    monkeypatch.setitem(sys.modules, "hermes_constants", fake_constants)
 
     messages = _prefill_messages_with_webui_context(
         {"messages": [{"role": "user", "content": "recall"}]},
