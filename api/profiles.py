@@ -999,8 +999,12 @@ def _get_profile_skills_stats(profile_dir: Path) -> tuple[int, int]:
     import time
     profile_dir = Path(profile_dir).resolve()
     now = time.time()
-    if profile_dir in _SKILLS_STATS_CACHE:
-        enabled, compat, expiry = _SKILLS_STATS_CACHE[profile_dir]
+    # Read via .get() (not membership-check + index) so a concurrent
+    # _SKILLS_STATS_CACHE.clear() on another thread can't raise KeyError
+    # between the `in` test and the lookup.
+    cached = _SKILLS_STATS_CACHE.get(profile_dir)
+    if cached is not None:
+        enabled, compat, expiry = cached
         if now < expiry:
             return enabled, compat
 
