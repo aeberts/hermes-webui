@@ -629,6 +629,13 @@ def main() -> None:
     except Exception as e:
         print(f'[!!] WARNING: SessionChannel reaper failed to start: {e}', flush=True)
 
+    # Start the kanban notification poller for webui sessions
+    try:
+        from api.kanban_notifier import start_kanban_notifier
+        start_kanban_notifier()
+    except Exception as e:
+        print(f'[!!] WARNING: Kanban notifier failed to start: {e}', flush=True)
+
     # Load WebUI dashboard plugins
     try:
         from api.plugins import load_plugins
