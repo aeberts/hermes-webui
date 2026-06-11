@@ -184,8 +184,12 @@ def _visible_pinned_lineage_ids(session_rows) -> set[str]:
 # module keep resolving without per-call-site refactors.
 from api.profiles import (  # noqa: F401, E402  (re-export)
     _profiles_match,
-    get_active_profile_name as _get_active_profile_name,
+    get_active_profile_name,
 )
+
+# Backward-compatible alias: the session-detail guard (#3982) references the
+# underscore-prefixed name, while the export guard (#3991) uses the bare name.
+_get_active_profile_name = get_active_profile_name
 
 
 def _all_profiles_query_flag(parsed_url) -> bool:
@@ -9253,6 +9257,9 @@ def _handle_session_export(handler, parsed):
     try:
         s = get_session(sid)
     except KeyError:
+        return bad(handler, "Session not found", 404)
+    active_profile = get_active_profile_name()
+    if not _profiles_match(getattr(s, "profile", None), active_profile):
         return bad(handler, "Session not found", 404)
     safe = redact_session_data(s.__dict__)
     payload = json.dumps(safe, ensure_ascii=False, indent=2)
