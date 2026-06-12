@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import queue
 import sys
+import threading
 import types
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -363,7 +365,6 @@ def test_poll_loop_exits_cleanly_when_kanban_db_not_importable():
     sys.modules["hermes_cli.kanban_db"] = None  # type: ignore[assignment]
 
     try:
-        import threading
         done = threading.Event()
 
         def run():
@@ -379,3 +380,76 @@ def test_poll_loop_exits_cleanly_when_kanban_db_not_importable():
                 sys.modules.pop(k, None)
             else:
                 sys.modules[k] = v
+
+
+# ── M1: server.py startup wiring (TC-15) ─────────────────────────────────────
+
+def test_server_wires_start_kanban_notifier():
+    """server.py must import and call start_kanban_notifier() at startup (static source check).
+
+    Oracle direction: removing the startup block from server.py causes both
+    assertions to fail.  Pattern mirrors B02's grep-assert for entry.py wiring.
+    """
+    server_path = Path(__file__).parent.parent / "server.py"
+    assert server_path.exists(), f"server.py not found at {server_path}"
+    content = server_path.read_text()
+    assert "from api.kanban_notifier import start_kanban_notifier" in content, (
+        "start_kanban_notifier not imported in server.py — startup wiring is missing"
+    )
+    assert "start_kanban_notifier()" in content, (
+        "start_kanban_notifier() call not found in server.py — startup wiring is missing"
+    )
+
+
+# ── M2: _active_session_streams() live path (TC-16) ──────────────────────────
+
+def _patch_api_config(fake_config):
+    """Context manager: temporarily replace sys.modules['api.config']."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _ctx():
+        saved = sys.modules.get("api.config")
+        sys.modules["api.config"] = fake_config  # type: ignore[assignment]
+        try:
+            yield
+        finally:
+            if saved is None:
+                sys.modules.pop("api.config", None)
+            else:
+                sys.modules["api.config"] = saved
+
+    return _ctx()
+
+
+def test_active_session_streams_returns_channel_for_active_session():
+    """_active_session_streams() maps session_id → channel when active_stream_id is set."""
+    mod = _import_notifier()
+    ch = FakeChannel()
+
+    fake_config = types.SimpleNamespace(
+        LOCK=threading.Lock(),
+        SESSIONS={"sess-1": SimpleNamespace(active_stream_id="stream-abc")},
+        STREAMS={"stream-abc": ch},
+    )
+
+    with _patch_api_config(fake_config):
+        result = mod._active_session_streams()
+
+    assert result == {"sess-1": ch}
+
+
+def test_active_session_streams_excludes_session_with_no_active_stream():
+    """_active_session_streams() omits sessions whose active_stream_id is None or absent."""
+    mod = _import_notifier()
+
+    fake_config = types.SimpleNamespace(
+        LOCK=threading.Lock(),
+        SESSIONS={"sess-1": SimpleNamespace(active_stream_id=None)},
+        STREAMS={},
+    )
+
+    with _patch_api_config(fake_config):
+        result = mod._active_session_streams()
+
+    assert result == {}
