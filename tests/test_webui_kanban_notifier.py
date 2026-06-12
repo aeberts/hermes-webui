@@ -453,3 +453,109 @@ def test_active_session_streams_excludes_session_with_no_active_stream():
         result = mod._active_session_streams()
 
     assert result == {}
+
+
+# ── B05: agent wakeup + stream-independent delivery ──────────────────────────
+
+def test_known_session_without_stream_gets_wakeup_and_live_view(monkeypatch):
+    """B05 core: a subscribed session with NO open in-turn stream must still
+    receive the live-view emit and a server-side agent wakeup."""
+    mod = _import_notifier()
+    kb = _make_fake_kb(
+        subs=[{"task_id": "t1", "platform": "webui", "chat_id": "sess-1", "thread_id": ""}],
+        events_by_task={"t1": [_fake_event("completed")]},
+        task_by_id={"t1": _fake_task(title="Synth", status="done", result="all good")},
+    )
+    live, wake = [], []
+    monkeypatch.setattr(mod, "_emit_live_view", lambda sid, payload: live.append((sid, payload)))
+    monkeypatch.setattr(mod, "_dispatch_agent_wakeup", lambda sid, did, prompt: wake.append((sid, did, prompt)))
+
+    mod._poll_once(kb, {}, known_sessions={"sess-1"})
+
+    assert len(live) == 1 and len(wake) == 1
+    sid, payload = live[0]
+    assert sid == "sess-1"
+    assert payload["event_id"] == "kanban:t1:completed"
+    assert payload["session_id"] == "sess-1"
+    wsid, did, prompt = wake[0]
+    assert wsid == "sess-1" and did == "kanban:t1:completed"
+    assert "t1" in prompt and "kanban_show" in prompt and "report" in prompt
+
+
+def test_unknown_session_with_stream_uses_legacy_channel_path(monkeypatch):
+    """Sessions outside SESSIONS (legacy/test envs) still get put_nowait delivery."""
+    mod = _import_notifier()
+    kb = _make_fake_kb(
+        subs=[{"task_id": "t1", "platform": "webui", "chat_id": "sess-1", "thread_id": ""}],
+        events_by_task={"t1": [_fake_event("completed")]},
+        task_by_id={"t1": _fake_task()},
+    )
+    wake = []
+    monkeypatch.setattr(mod, "_dispatch_agent_wakeup", lambda *a: wake.append(a))
+    ch = FakeChannel()
+
+    mod._poll_once(kb, {"sess-1": ch}, known_sessions=set())
+
+    delivered = ch.received()
+    assert len(delivered) == 1
+    event_name, payload = delivered[0]
+    assert event_name == "kanban_done" and payload["event_id"] == "kanban:t1:completed"
+    assert wake == []  # no wakeup for unknown sessions
+
+
+def test_dispatch_wakeup_defers_when_turn_active(monkeypatch):
+    mod = _import_notifier()
+    import api.background_process as bp
+    deferred, started = [], []
+    monkeypatch.setattr(bp, "_session_has_active_turn", lambda sid: True)
+    monkeypatch.setattr(bp, "record_deferred_wakeup", lambda sid, did, prompt: deferred.append((sid, did)))
+    monkeypatch.setattr(bp, "_start_server_side_wakeup_turn",
+                        lambda sid, prompt, process_id="": started.append(sid))
+
+    mod._dispatch_agent_wakeup("sess-1", "kanban:t1:completed", "prompt text")
+
+    assert deferred == [("sess-1", "kanban:t1:completed")]
+    assert started == []
+
+
+def test_dispatch_wakeup_starts_turn_when_idle(monkeypatch):
+    mod = _import_notifier()
+    import api.background_process as bp
+    deferred, started = [], []
+    monkeypatch.setattr(bp, "_session_has_active_turn", lambda sid: False)
+    monkeypatch.setattr(bp, "record_deferred_wakeup", lambda sid, did, prompt: deferred.append(sid))
+    monkeypatch.setattr(
+        bp, "_start_server_side_wakeup_turn",
+        lambda sid, prompt, process_id="": started.append((sid, process_id, prompt)),
+    )
+
+    mod._dispatch_agent_wakeup("sess-1", "kanban:t1:completed", "prompt text")
+
+    assert deferred == []
+    assert len(started) == 1
+    sid, pid, prompt = started[0]
+    assert sid == "sess-1" and pid == "kanban:t1:completed" and prompt == "prompt text"
+
+
+def test_build_wakeup_prompt_truncates_long_result():
+    mod = _import_notifier()
+    prompt = mod._build_wakeup_prompt("t1", "Synth", "my-board", "completed", "x" * 1000)
+    assert "…[truncated]" in prompt
+    assert len(prompt) < 1000
+    assert "my-board" in prompt and "completed" in prompt
+
+
+def test_final_status_sub_removed_on_known_session_path(monkeypatch):
+    """Sub cleanup must run on the B05 path too, not only the legacy path."""
+    mod = _import_notifier()
+    kb = _make_fake_kb(
+        subs=[{"task_id": "t1", "platform": "webui", "chat_id": "sess-1", "thread_id": ""}],
+        events_by_task={"t1": [_fake_event("completed")]},
+        task_by_id={"t1": _fake_task(status="done")},
+    )
+    monkeypatch.setattr(mod, "_emit_live_view", lambda *a: None)
+    monkeypatch.setattr(mod, "_dispatch_agent_wakeup", lambda *a: None)
+
+    mod._poll_once(kb, {}, known_sessions={"sess-1"})
+
+    assert kb._removed_subs == [{"task_id": "t1", "platform": "webui", "chat_id": "sess-1"}]

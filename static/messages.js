@@ -3219,6 +3219,17 @@ function attachLiveStream(activeSid, streamId, uploaded=[], options={}){
       }
     });
 
+    // kanban_done (local kanban-e2e patch, B05): subscribed kanban task hit a
+    // terminal state. Same contract as bg_task_complete: the agent wakeup is
+    // SERVER-SIDE (api/kanban_notifier._dispatch_agent_wakeup); this event is
+    // pure live-view. Dedupe shares the bg ring buffer — kanban event_ids are
+    // namespaced ("kanban:<task>:<event>") so the keys cannot collide.
+    source.addEventListener('kanban_done',e=>{
+      if(typeof _handleKanbanDoneEvent==='function'){
+        _handleKanbanDoneEvent(e, activeSid, {source:'stream'});
+      }
+    });
+
     source.addEventListener('done',e=>{
       if(_streamFinalized) return;
       _clearStreamEndRecovery();
@@ -4440,6 +4451,12 @@ function startSessionStream(sid) {
         _handleBgTaskCompleteEvent(e, sid, {source: 'session'});
       }
     });
+    es.addEventListener('kanban_done', e => {
+      // kanban-e2e B05: kanban terminal-state live-view (wakeup is server-side).
+      if (typeof _handleKanbanDoneEvent === 'function') {
+        _handleKanbanDoneEvent(e, sid, {source: 'session'});
+      }
+    });
     // ── Defect B: live-view of server-initiated (Option Z) turns ──────────
     // The drain thread starts the wakeup turn server-side and the server
     // fans a `server_turn_started` {stream_id} frame onto this per-session
@@ -4594,6 +4611,34 @@ function _handleBgTaskCompleteEvent(e, expectedSid, opts) {
     // existing chat-stream EventSource; if the tab is closed the turn still
     // runs server-side and the result is persisted to the session store.
     // The user-facing toast + drop-when-focused gate land in PR (c).
+  } catch(_) {}
+}
+
+// kanban_done handler (local kanban-e2e patch, B05) — sibling of
+// _handleBgTaskCompleteEvent for kanban terminal-state events. The agent
+// wakeup is server-side (api/kanban_notifier.py); this handler only renders
+// a focus-gated toast and marks the session viewed. Dedupe shares the bg
+// ring buffer: kanban event_ids are namespaced "kanban:<task>:<event>".
+// No ack POST — the server-side claim (claim_unseen_events_for_sub) already
+// consumed the event before emission.
+function _handleKanbanDoneEvent(e, expectedSid, opts) {
+  try {
+    const d = JSON.parse(e.data || '{}');
+    const sid = d.session_id || expectedSid;
+    if (sid !== expectedSid) return;
+    const evt_id = d.event_id ? String(d.event_id) : '';
+    if (!evt_id) return;
+    if (_bgTaskCompleteRingBufferAdd(sid, evt_id)) return;  // duplicate
+    const _viewed = typeof _isSessionActivelyViewed === 'function' && _isSessionActivelyViewed(sid);
+    if (_viewed) {
+      try { _markSessionViewed(sid, (S&&S.session&&S.session.session_id===sid)?(S.session.message_count??(S.messages&&S.messages.length)??0):0); } catch(_){}
+    } else {
+      try {
+        const title = (d.title || d.task_id || '').slice(0, 60) || '?';
+        const status = d.status || 'done';
+        showToast(`Kanban: ${title} — ${status}`, 2600);
+      } catch (_) {}
+    }
   } catch(_) {}
 }
 
