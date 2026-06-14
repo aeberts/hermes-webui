@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.407] — 2026-06-14 — Release NT (nest forked sessions under their parent in the sidebar, #3224)
+
+### Added
+
+- **Forked sessions now nest under their parent in the sidebar (#3224).** A session that was forked from another shows a "N children" badge on the parent row; clicking it expands the forks nested directly beneath, indented and collapsible (default collapsed, so the sidebar stays uncluttered when you have no forks). Nested forks keep their full action surface — three-dot menu, rename, swipe archive/delete — and a live state indicator, while read-only/subagent child sessions keep their existing click-to-open behavior. Batch-select reaches expanded forks, and a streaming fork no longer marks its parent as falsely unread when it finishes. (#3224)
+
 ## [v0.51.406] — 2026-06-14 — Release NS (project-context file in the Memory tab, #3866)
 
 ### Added
