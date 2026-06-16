@@ -203,6 +203,24 @@ function extractFunc(name) {
   return ui.slice(start, i);
 }
 
+function extractConst(name) {
+  const re = new RegExp('const\\s+' + name + '\\s*=');
+  const start = ui.search(re);
+  if (start < 0) throw new Error(name + ' not found as const');
+  const eqIdx = ui.indexOf('=', start + name.length);
+  let i = ui.indexOf('{', eqIdx);
+  if (i < 0) throw new Error(name + ' arrow body not found');
+  let depth = 1;
+  i++;
+  while (depth > 0 && i < ui.length) {
+    if (ui[i] === '{') depth++;
+    else if (ui[i] === '}') depth--;
+    i++;
+  }
+  if (ui[i] === ';') i++;
+  return ui.slice(start, i);
+}
+
 function makeClassList(initial) {
   const set = new Set(initial || []);
   return {
@@ -397,6 +415,908 @@ process.stdout.write(JSON.stringify({
 }));
 """
 
+_INPLACE_DRIVER = r"""
+const fs = require('fs');
+const ui = fs.readFileSync(process.argv[2], 'utf8');
+
+function extractFunc(name) {
+  const re = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
+  const start = ui.search(re);
+  if (start < 0) throw new Error(name + ' not found');
+  let openParen = ui.indexOf('(', start);
+  let i = openParen + 1;
+  let parenDepth = 1;
+  while (parenDepth > 0 && i < ui.length) {
+    if (ui[i] === '(') parenDepth++;
+    else if (ui[i] === ')') parenDepth--;
+    i++;
+  }
+  i = ui.indexOf('{', i);
+  let depth = 1;
+  i++;
+  while (depth > 0 && i < ui.length) {
+    if (ui[i] === '{') depth++;
+    else if (ui[i] === '}') depth--;
+    i++;
+  }
+  return ui.slice(start, i);
+}
+
+function extractConst(name) {
+  const re = new RegExp('const\\s+' + name + '\\s*=');
+  const start = ui.search(re);
+  if (start < 0) throw new Error(name + ' not found as const');
+  const eqIdx = ui.indexOf('=', start + name.length);
+  let i = ui.indexOf('{', eqIdx);
+  if (i < 0) throw new Error(name + ' arrow body not found');
+  let depth = 1;
+  i++;
+  while (depth > 0 && i < ui.length) {
+    if (ui[i] === '{') depth++;
+    else if (ui[i] === '}') depth--;
+    i++;
+  }
+  if (ui[i] === ';') i++;
+  return ui.slice(start, i);
+}
+
+// Extended DOM globals to enable in-place expansion path
+const CSS = { escape: s => String(s || '').replace(/[^a-zA-Z0-9_-]/g, '\\$&') };
+const requestAnimationFrame = fn => { fn(); return 0; };
+
+function makeClassList(initial) {
+  const set = new Set(initial || []);
+  return {
+    _set: set,
+    add(cls) { set.add(cls); },
+    remove(cls) { set.delete(cls); },
+    contains(cls) { return set.has(cls); },
+    toggle(cls, force) {
+      if (force === true) { set.add(cls); return true; }
+      if (force === false) { set.delete(cls); return false; }
+      if (set.has(cls)) { set.delete(cls); return false; }
+      set.add(cls);
+      return true;
+    },
+  };
+}
+
+function defineClassName(node) {
+  Object.defineProperty(node, 'className', {
+    get() { return [...node.classList._set].join(' '); },
+    set(v) { node.classList = makeClassList(String(v || '').split(/\s+/).filter(Boolean)); },
+  });
+}
+
+function makeNode(tag) {
+  const node = {
+    tagName: String(tag || '').toUpperCase(),
+    children: [],
+    dataset: {},
+    style: {},
+    parentElement: null,
+    textContent: '',
+    value: '',
+    tabIndex: 0,
+    onclick: null,
+    _listeners: {},
+    _innerHTML: '',
+    appendChild(child) {
+      child.parentElement = this;
+      this.children.push(child);
+      if (this.tagName === 'OPTGROUP' && this._ownerSelect && child.tagName === 'OPTION') {
+        this._ownerSelect.options.push(child);
+      }
+      return child;
+    },
+    insertBefore(newChild, refChild) {
+      newChild.parentElement = this;
+      const idx = refChild ? this.children.indexOf(refChild) : -1;
+      if (idx >= 0) {
+        this.children.splice(idx, 0, newChild);
+      } else {
+        this.children.push(newChild);
+      }
+      return newChild;
+    },
+    remove() {
+      if (this.parentElement) {
+        const idx = this.parentElement.children.indexOf(this);
+        if (idx >= 0) this.parentElement.children.splice(idx, 1);
+      }
+    },
+    addEventListener(type, handler) { this._listeners[type] = handler; },
+    querySelector(selector) {
+      // Try the _qs cache first
+      if (this._qs && this._qs[selector]) return this._qs[selector];
+      // Handle attribute selectors and descendant selectors
+      return querySelectorAllImpl(this, selector)[0] || null;
+    },
+    querySelectorAll(selector) {
+      return querySelectorAllImpl(this, selector);
+    },
+    setAttribute(name, value) { this[name] = value; },
+    focus() { this._focused = true; },
+  };
+  Object.defineProperty(node, 'offsetTop', {
+    value: 0,
+  });
+  Object.defineProperty(node, 'scrollTop', {
+    get() { return this._scrollTop || 0; },
+    set(v) { this._scrollTop = v; },
+  });
+  Object.defineProperty(node, 'previousElementSibling', {
+    get() {
+      if (!this.parentElement) return null;
+      const idx = this.parentElement.children.indexOf(this);
+      return idx > 0 ? this.parentElement.children[idx - 1] : null;
+    },
+  });
+  node.classList = makeClassList();
+  defineClassName(node);
+  Object.defineProperty(node, 'innerHTML', {
+    get() { return this._innerHTML; },
+    set(v) {
+      this._innerHTML = String(v || '');
+      this.children = [];
+      this._qs = {};
+      if (this.tagName === 'DIV' && this._innerHTML.includes('model-search-input')) {
+        const input = makeNode('input');
+        input.className = 'model-search-input';
+        const clear = makeNode('button');
+        clear.className = 'model-search-clear';
+        this._qs['.model-search-input'] = input;
+        this._qs['.model-search-clear'] = clear;
+      } else if (this.tagName === 'DIV' && this._innerHTML.includes('model-custom-input')) {
+        const input = makeNode('input');
+        input.className = 'model-custom-input';
+        const btn = makeNode('button');
+        btn.className = 'model-custom-btn';
+        this._qs['.model-custom-input'] = input;
+        this._qs['.model-custom-btn'] = btn;
+      }
+    },
+  });
+  return node;
+}
+
+function querySelectorAllImpl(node, selector) {
+  const results = [];
+  const stack = [node];
+
+  while (stack.length) {
+    const n = stack.shift();
+    if (n.children && n.children.length) {
+      stack.push(...n.children);
+    }
+
+    // Simple class selector: .foo
+    if (selector.startsWith('.') && !selector.includes('[') && !selector.includes(' ')) {
+      const className = selector.slice(1);
+      if (n.className && n.className.includes(className)) {
+        results.push(n);
+      }
+    }
+    // Attribute selector: .foo[data-bar="baz"]
+    else if (selector.includes('[') && !selector.includes(' ')) {
+      const match = selector.match(/^\.([^\[]+)\[data-([^\]=]+)="([^\]]+)"\]$/);
+      if (match) {
+        const [, className, dataKey, dataVal] = match;
+        if (n.className && n.className.includes(className) &&
+            n.dataset && n.dataset[dataKey] === dataVal) {
+          results.push(n);
+        }
+      }
+    }
+    // Descendant selector: .foo .bar
+    else if (selector.includes(' ')) {
+      const parts = selector.split(' ').filter(Boolean);
+      if (parts.length === 2) {
+        const [parentSel, childSel] = parts;
+        // Find all ancestors matching parentSel
+        let parent = n.parentElement;
+        let hasParent = false;
+        while (parent) {
+          if (isMatch(parent, parentSel)) {
+            hasParent = true;
+            break;
+          }
+          parent = parent.parentElement;
+        }
+        // If we found a matching ancestor, check if this node matches childSel
+        if (hasParent && isMatch(n, childSel)) {
+          results.push(n);
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+function isMatch(node, selector) {
+  // Simple class selector: .foo
+  if (selector.startsWith('.') && !selector.includes('[')) {
+    const className = selector.slice(1);
+    return node.className && node.className.includes(className);
+  }
+  // Attribute selector: .foo[data-bar="baz"]
+  if (selector.includes('[')) {
+    const match = selector.match(/^\.([^\[]+)\[data-([^\]=]+)="([^\]]+)"\]$/);
+    if (match) {
+      const [, className, dataKey, dataVal] = match;
+      return node.className && node.className.includes(className) &&
+             node.dataset && node.dataset[dataKey] === dataVal;
+    }
+  }
+  return false;
+}
+
+function makeOption(value, label, parent) {
+  const opt = makeNode('option');
+  opt.value = value;
+  opt.textContent = label || value;
+  opt.parentElement = parent || null;
+  return opt;
+}
+
+function makeSelect(groups, selectedValue) {
+  const sel = { id: 'modelSelect', children: [], options: [], value: selectedValue || '' };
+  for (const group of groups || []) {
+    const og = makeNode('optgroup');
+    og.label = group.provider || '';
+    og.dataset.provider = group.provider_id || '';
+    og._ownerSelect = sel;
+    if (group.extra_models) og.dataset.extraModels = JSON.stringify(group.extra_models);
+    for (const model of group.models || []) {
+      og.appendChild(makeOption(model.id, model.label || model.id, og));
+    }
+    sel.children.push(og);
+    sel.options.push(...og.children);
+  }
+  return sel;
+}
+
+function snapshot(dd) {
+  const out = [];
+  const walk = (node) => {
+    for (const child of (node.children || [])) {
+      out.push({
+        className: child.className,
+        textContent: child.textContent,
+        html: child._innerHTML || '',
+      });
+      if (child.children && child.children.length) walk(child);
+    }
+  };
+  walk(dd);
+  return out;
+}
+
+function findInTree(dd, pred) {
+  const stack = [...(dd.children || [])];
+  while (stack.length) {
+    const n = stack.shift();
+    if (pred(n)) return n;
+    if (n.children && n.children.length) stack.push(...n.children);
+  }
+  return null;
+}
+
+const payload = JSON.parse(process.argv[3]);
+const dropdown = makeNode('div');
+dropdown.classList.add('open');
+const modelSelect = makeSelect(payload.groups, payload.selectedValue || payload.groups[0].models[0].id);
+
+function $(id) {
+  if (id === 'composerModelDropdown') return dropdown;
+  if (id === 'modelSelect') return modelSelect;
+  return null;
+}
+const window = { _configuredModelBadges: payload.configuredBadges || {} };
+const document = { createElement(tag) { return makeNode(tag); } };
+function esc(v) { return String(v || ''); }
+function t(key, ...args) {
+  if (key === 'model_show_all_models') return `Show all ${args[0]} models`;
+  return key;
+}
+function li() { return 'x'; }
+function getModelLabel(v) { return String(v || ''); }
+function _providerFromModelValue(v) {
+  const value = String(v || '');
+  if (value.startsWith('@') && value.includes(':')) return value.slice(1, value.lastIndexOf(':'));
+  return '';
+}
+function _normalizeConfiguredModelKey(v) { return String(v || '').toLowerCase(); }
+function _getConfiguredModelBadge(value, badgeMap) { return badgeMap[value] || null; }
+function closeModelDropdown() {}
+function selectModelFromDropdown() {}
+
+for (const name of [
+  '_readModelOverflowData',
+  '_appendOverflowOptionsToGroup',
+  'renderModelDropdown',
+]) {
+  eval(extractFunc(name));
+}
+
+eval(extractConst('_expandOverflowGroup'));
+
+renderModelDropdown();
+const initial = snapshot(dropdown);
+const initialShowAllRow = findInTree(dropdown, node => String(node._innerHTML || '').includes('Show all'));
+const searchInput = dropdown.children[1].querySelector('.model-search-input');
+searchInput.value = payload.searchTerm;
+searchInput._listeners.input();
+const searched = snapshot(dropdown);
+initialShowAllRow.onclick({ stopPropagation() {} });
+const searchInputAfterExpand = dropdown.children[1].querySelector('.model-search-input');
+searchInputAfterExpand.value = '';
+searchInputAfterExpand._listeners.input();
+const expanded = snapshot(dropdown);
+
+process.stdout.write(JSON.stringify({
+  inPlacePath: true,
+  initialShowAll: initial.some(item => String(item.html || '').includes('Show all')),
+  expandedHasShowAll: expanded.some(item => String(item.html || '').includes('Show all')),
+  clearedHasShowAll: expanded.some(item => String(item.html || '').includes('Show all')),
+  clearedModelCount: modelSelect.children[0].children.length,
+  optionCountAfterExpand: modelSelect.children[0].children.length,
+}));
+"""
+
+_INPLACE_ENDPOINT_ERROR_DRIVER = r"""
+const fs = require('fs');
+const ui = fs.readFileSync(process.argv[2], 'utf8');
+
+function extractFunc(name) {
+  const re = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
+  const start = ui.search(re);
+  if (start < 0) throw new Error(name + ' not found');
+  let openParen = ui.indexOf('(', start);
+  let i = openParen + 1;
+  let parenDepth = 1;
+  while (parenDepth > 0 && i < ui.length) {
+    if (ui[i] === '(') parenDepth++;
+    else if (ui[i] === ')') parenDepth--;
+    i++;
+  }
+  i = ui.indexOf('{', i);
+  let depth = 1;
+  i++;
+  while (depth > 0 && i < ui.length) {
+    if (ui[i] === '{') depth++;
+    else if (ui[i] === '}') depth--;
+    i++;
+  }
+  return ui.slice(start, i);
+}
+
+const CSS = { escape: s => String(s || '').replace(/[^a-zA-Z0-9_-]/g, '\\$&') };
+const requestAnimationFrame = fn => { fn(); return 0; };
+
+function makeClassList(initial) {
+  const set = new Set(initial || []);
+  return {
+    _set: set,
+    add(cls) { set.add(cls); },
+    remove(cls) { set.delete(cls); },
+    contains(cls) { return set.has(cls); },
+    toggle(cls, force) {
+      if (force === true) { set.add(cls); return true; }
+      if (force === false) { set.delete(cls); return false; }
+      if (set.has(cls)) { set.delete(cls); return false; }
+      set.add(cls);
+      return true;
+    },
+  };
+}
+
+function defineClassName(node) {
+  Object.defineProperty(node, 'className', {
+    get() { return [...node.classList._set].join(' '); },
+    set(v) { node.classList = makeClassList(String(v || '').split(/\s+/).filter(Boolean)); },
+  });
+}
+
+function makeNode(tag) {
+  const node = {
+    tagName: String(tag || '').toUpperCase(),
+    children: [],
+    dataset: {},
+    style: {},
+    parentElement: null,
+    textContent: '',
+    value: '',
+    tabIndex: 0,
+    onclick: null,
+    _listeners: {},
+    _innerHTML: '',
+    appendChild(child) {
+      child.parentElement = this;
+      this.children.push(child);
+      if (this.tagName === 'OPTGROUP' && this._ownerSelect && child.tagName === 'OPTION') {
+        this._ownerSelect.options.push(child);
+      }
+      return child;
+    },
+    addEventListener(type, handler) { this._listeners[type] = handler; },
+    querySelector(selector) { return this._qs ? this._qs[selector] || null : null; },
+    setAttribute(name, value) { this[name] = value; },
+    focus() { this._focused = true; },
+  };
+  node.classList = makeClassList();
+  defineClassName(node);
+  Object.defineProperty(node, 'innerHTML', {
+    get() { return this._innerHTML; },
+    set(v) {
+      this._innerHTML = String(v || '');
+      this.children = [];
+      this._qs = {};
+      if (this.tagName === 'DIV' && this._innerHTML.includes('model-search-input')) {
+        const input = makeNode('input');
+        input.className = 'model-search-input';
+        const clear = makeNode('button');
+        clear.className = 'model-search-clear';
+        this._qs['.model-search-input'] = input;
+        this._qs['.model-search-clear'] = clear;
+      } else if (this.tagName === 'DIV' && this._innerHTML.includes('model-custom-input')) {
+        const input = makeNode('input');
+        input.className = 'model-custom-input';
+        const btn = makeNode('button');
+        btn.className = 'model-custom-btn';
+        this._qs['.model-custom-input'] = input;
+        this._qs['.model-custom-btn'] = btn;
+      }
+    },
+  });
+  return node;
+}
+
+function makeOption(value, label, parent) {
+  const opt = makeNode('option');
+  opt.value = value;
+  opt.textContent = label || value;
+  opt.parentElement = parent || null;
+  return opt;
+}
+
+function makeSelect(groups, selectedValue) {
+  const sel = { id: 'modelSelect', children: [], options: [], value: selectedValue || '' };
+  for (const group of groups || []) {
+    const og = makeNode('optgroup');
+    og.label = group.provider || '';
+    og.dataset.provider = group.provider_id || '';
+    og._ownerSelect = sel;
+    if (group.extra_models) og.dataset.extraModels = JSON.stringify(group.extra_models);
+    if (group.modelsEndpointError) og.dataset.modelsEndpointError = JSON.stringify(group.modelsEndpointError);
+    for (const model of group.models || []) {
+      og.appendChild(makeOption(model.id, model.label || model.id, og));
+    }
+    sel.children.push(og);
+    sel.options.push(...og.children);
+  }
+  return sel;
+}
+
+const payload = JSON.parse(process.argv[3]);
+const dropdown = makeNode('div');
+dropdown.classList.add('open');
+const modelSelect = makeSelect(payload.groups, payload.selectedValue || payload.groups[0].models[0].id);
+
+function $(id) {
+  if (id === 'composerModelDropdown') return dropdown;
+  if (id === 'modelSelect') return modelSelect;
+  return null;
+}
+const window = { _configuredModelBadges: payload.configuredBadges || {} };
+const document = { createElement(tag) { return makeNode(tag); } };
+function esc(v) { return String(v || ''); }
+function t(key, ...args) {
+  if (key === 'model_show_all_models') return `Show all ${args[0]} models`;
+  return key;
+}
+function li() { return 'x'; }
+function getModelLabel(v) { return String(v || ''); }
+function _providerFromModelValue(v) {
+  const value = String(v || '');
+  if (value.startsWith('@') && value.includes(':')) return value.slice(1, value.lastIndexOf(':'));
+  return '';
+}
+function _normalizeConfiguredModelKey(v) { return String(v || '').toLowerCase(); }
+function _getConfiguredModelBadge(value, badgeMap) { return badgeMap[value] || null; }
+function closeModelDropdown() {}
+function selectModelFromDropdown() {}
+
+for (const name of [
+  '_readModelOverflowData',
+  '_appendOverflowOptionsToGroup',
+  'renderModelDropdown',
+]) {
+  eval(extractFunc(name));
+}
+
+renderModelDropdown();
+
+// Find the group wrapper and check its display style
+let groupWrapperHidden = false;
+const walk = (node) => {
+  for (const child of (node.children || [])) {
+    if (child.className && child.className.includes('model-group-body')) {
+      groupWrapperHidden = child.style.display === 'none';
+    }
+    if (child.children && child.children.length) walk(child);
+  }
+};
+walk(dropdown);
+
+process.stdout.write(JSON.stringify({
+  groupRendersOpen: !groupWrapperHidden,
+}));
+"""
+
+_INPLACE_PREEXISTING_DRIVER = r"""
+const fs = require('fs');
+const ui = fs.readFileSync(process.argv[2], 'utf8');
+
+function extractFunc(name) {
+  const re = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
+  const start = ui.search(re);
+  if (start < 0) throw new Error(name + ' not found');
+  let openParen = ui.indexOf('(', start);
+  let i = openParen + 1;
+  let parenDepth = 1;
+  while (parenDepth > 0 && i < ui.length) {
+    if (ui[i] === '(') parenDepth++;
+    else if (ui[i] === ')') parenDepth--;
+    i++;
+  }
+  i = ui.indexOf('{', i);
+  let depth = 1;
+  i++;
+  while (depth > 0 && i < ui.length) {
+    if (ui[i] === '{') depth++;
+    else if (ui[i] === '}') depth--;
+    i++;
+  }
+  return ui.slice(start, i);
+}
+
+function extractConst(name) {
+  const re = new RegExp('const\\s+' + name + '\\s*=');
+  const start = ui.search(re);
+  if (start < 0) throw new Error(name + ' not found as const');
+  const eqIdx = ui.indexOf('=', start + name.length);
+  let i = ui.indexOf('{', eqIdx);
+  if (i < 0) throw new Error(name + ' arrow body not found');
+  let depth = 1;
+  i++;
+  while (depth > 0 && i < ui.length) {
+    if (ui[i] === '{') depth++;
+    else if (ui[i] === '}') depth--;
+    i++;
+  }
+  if (ui[i] === ';') i++;
+  return ui.slice(start, i);
+}
+
+const CSS = { escape: s => String(s || '').replace(/[^a-zA-Z0-9_-]/g, '\\$&') };
+const requestAnimationFrame = fn => { fn(); return 0; };
+
+function makeClassList(initial) {
+  const set = new Set(initial || []);
+  return {
+    _set: set,
+    add(cls) { set.add(cls); },
+    remove(cls) { set.delete(cls); },
+    contains(cls) { return set.has(cls); },
+    toggle(cls, force) {
+      if (force === true) { set.add(cls); return true; }
+      if (force === false) { set.delete(cls); return false; }
+      if (set.has(cls)) { set.delete(cls); return false; }
+      set.add(cls);
+      return true;
+    },
+  };
+}
+
+function defineClassName(node) {
+  Object.defineProperty(node, 'className', {
+    get() { return [...node.classList._set].join(' '); },
+    set(v) { node.classList = makeClassList(String(v || '').split(/\s+/).filter(Boolean)); },
+  });
+}
+
+function makeNode(tag) {
+  const node = {
+    tagName: String(tag || '').toUpperCase(),
+    children: [],
+    dataset: {},
+    style: {},
+    parentElement: null,
+    textContent: '',
+    value: '',
+    tabIndex: 0,
+    onclick: null,
+    _listeners: {},
+    _innerHTML: '',
+    appendChild(child) {
+      child.parentElement = this;
+      this.children.push(child);
+      if (this.tagName === 'OPTGROUP' && this._ownerSelect && child.tagName === 'OPTION') {
+        this._ownerSelect.options.push(child);
+      }
+      return child;
+    },
+    insertBefore(newChild, refChild) {
+      newChild.parentElement = this;
+      const idx = refChild ? this.children.indexOf(refChild) : -1;
+      if (idx >= 0) {
+        this.children.splice(idx, 0, newChild);
+      } else {
+        this.children.push(newChild);
+      }
+      return newChild;
+    },
+    remove() {
+      if (this.parentElement) {
+        const idx = this.parentElement.children.indexOf(this);
+        if (idx >= 0) this.parentElement.children.splice(idx, 1);
+      }
+    },
+    addEventListener(type, handler) { this._listeners[type] = handler; },
+    querySelector(selector) {
+      // Try the _qs cache first
+      if (this._qs && this._qs[selector]) return this._qs[selector];
+      // Handle attribute selectors and descendant selectors
+      return querySelectorAllImpl(this, selector)[0] || null;
+    },
+    querySelectorAll(selector) {
+      return querySelectorAllImpl(this, selector);
+    },
+    setAttribute(name, value) { this[name] = value; },
+    focus() { this._focused = true; },
+  };
+  Object.defineProperty(node, 'offsetTop', {
+    value: 0,
+  });
+  Object.defineProperty(node, 'scrollTop', {
+    get() { return this._scrollTop || 0; },
+    set(v) { this._scrollTop = v; },
+  });
+  Object.defineProperty(node, 'previousElementSibling', {
+    get() {
+      if (!this.parentElement) return null;
+      const idx = this.parentElement.children.indexOf(this);
+      return idx > 0 ? this.parentElement.children[idx - 1] : null;
+    },
+  });
+  node.classList = makeClassList();
+  defineClassName(node);
+  Object.defineProperty(node, 'innerHTML', {
+    get() { return this._innerHTML; },
+    set(v) {
+      this._innerHTML = String(v || '');
+      this.children = [];
+      this._qs = {};
+      if (this.tagName === 'DIV' && this._innerHTML.includes('model-search-input')) {
+        const input = makeNode('input');
+        input.className = 'model-search-input';
+        const clear = makeNode('button');
+        clear.className = 'model-search-clear';
+        this._qs['.model-search-input'] = input;
+        this._qs['.model-search-clear'] = clear;
+      } else if (this.tagName === 'DIV' && this._innerHTML.includes('model-custom-input')) {
+        const input = makeNode('input');
+        input.className = 'model-custom-input';
+        const btn = makeNode('button');
+        btn.className = 'model-custom-btn';
+        this._qs['.model-custom-input'] = input;
+        this._qs['.model-custom-btn'] = btn;
+      }
+    },
+  });
+  return node;
+}
+
+function querySelectorAllImpl(node, selector) {
+  const results = [];
+  const stack = [node];
+
+  while (stack.length) {
+    const n = stack.shift();
+    if (n.children && n.children.length) {
+      stack.push(...n.children);
+    }
+
+    if (selector.startsWith('.') && !selector.includes('[') && !selector.includes(' ')) {
+      const className = selector.slice(1);
+      if (n.className && n.className.includes(className)) {
+        results.push(n);
+      }
+    }
+    else if (selector.includes('[') && !selector.includes(' ')) {
+      const match = selector.match(/^\.([^\[]+)\[data-([^\]=]+)="([^\]]+)"\]$/);
+      if (match) {
+        const [, className, dataKey, dataVal] = match;
+        if (n.className && n.className.includes(className) &&
+            n.dataset && n.dataset[dataKey] === dataVal) {
+          results.push(n);
+        }
+      }
+    }
+    else if (selector.includes(' ')) {
+      const parts = selector.split(' ').filter(Boolean);
+      if (parts.length === 2) {
+        const [parentSel, childSel] = parts;
+        let parent = n.parentElement;
+        let hasParent = false;
+        while (parent) {
+          if (isMatch(parent, parentSel)) {
+            hasParent = true;
+            break;
+          }
+          parent = parent.parentElement;
+        }
+        if (hasParent && isMatch(n, childSel)) {
+          results.push(n);
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+function isMatch(node, selector) {
+  if (selector.startsWith('.') && !selector.includes('[')) {
+    const className = selector.slice(1);
+    return node.className && node.className.includes(className);
+  }
+  if (selector.includes('[')) {
+    const match = selector.match(/^\.([^\[]+)\[data-([^\]=]+)="([^\]]+)"\]$/);
+    if (match) {
+      const [, className, dataKey, dataVal] = match;
+      return node.className && node.className.includes(className) &&
+             node.dataset && node.dataset[dataKey] === dataVal;
+    }
+  }
+  return false;
+}
+
+function makeOption(value, label, parent) {
+  const opt = makeNode('option');
+  opt.value = value;
+  opt.textContent = label || value;
+  opt.parentElement = parent || null;
+  return opt;
+}
+
+function makeSelect(groups, selectedValue) {
+  const sel = { id: 'modelSelect', children: [], options: [], value: selectedValue || '' };
+  for (const group of groups || []) {
+    const og = makeNode('optgroup');
+    og.label = group.provider || '';
+    og.dataset.provider = group.provider_id || '';
+    og._ownerSelect = sel;
+    if (group.extra_models) og.dataset.extraModels = JSON.stringify(group.extra_models);
+    for (const model of group.models || []) {
+      og.appendChild(makeOption(model.id, model.label || model.id, og));
+    }
+    sel.children.push(og);
+    sel.options.push(...og.children);
+  }
+  return sel;
+}
+
+function findInTree(dd, pred) {
+  const stack = [...(dd.children || [])];
+  while (stack.length) {
+    const n = stack.shift();
+    if (pred(n)) return n;
+    if (n.children && n.children.length) stack.push(...n.children);
+  }
+  return null;
+}
+
+const payload = JSON.parse(process.argv[3]);
+const dropdown = makeNode('div');
+dropdown.classList.add('open');
+const modelSelect = makeSelect(payload.groups, payload.selectedValue || payload.groups[0].models[0].id);
+
+// Pre-inject one overflow model as an <option> in the optgroup
+if (payload.preexistingModelId) {
+  const og = modelSelect.children[0];
+  const preexisting = payload.groups[0].extra_models.find(m => m.id === payload.preexistingModelId);
+  if (preexisting && og) {
+    const opt = makeOption(preexisting.id, preexisting.label || preexisting.id, og);
+    og.appendChild(opt);
+  }
+}
+
+function $(id) {
+  if (id === 'composerModelDropdown') return dropdown;
+  if (id === 'modelSelect') return modelSelect;
+  return null;
+}
+const window = { _configuredModelBadges: payload.configuredBadges || {} };
+const document = { createElement(tag) { return makeNode(tag); } };
+function esc(v) { return String(v || ''); }
+function t(key, ...args) {
+  if (key === 'model_show_all_models') return `Show all ${args[0]} models`;
+  return key;
+}
+function li() { return 'x'; }
+function getModelLabel(v) { return String(v || ''); }
+function _providerFromModelValue(v) {
+  const value = String(v || '');
+  if (value.startsWith('@') && value.includes(':')) return value.slice(1, value.lastIndexOf(':'));
+  return '';
+}
+function _normalizeConfiguredModelKey(v) { return String(v || '').toLowerCase(); }
+function _getConfiguredModelBadge(value, badgeMap) { return badgeMap[value] || null; }
+function closeModelDropdown() {}
+function selectModelFromDropdown() {}
+
+for (const name of [
+  '_readModelOverflowData',
+  '_appendOverflowOptionsToGroup',
+  'renderModelDropdown',
+]) {
+  eval(extractFunc(name));
+}
+
+eval(extractConst('_expandOverflowGroup'));
+
+renderModelDropdown();
+const initialShowAllRow = findInTree(dropdown, node => String(node._innerHTML || '').includes('Show all'));
+initialShowAllRow.onclick({ stopPropagation() {} });
+
+// Check if preexisting model is now visible - look through all innerHTML or textContent
+let preexistingVisible = false;
+let showAllGone = false;
+const walk = (node, depth=0) => {
+  // Check this node's content
+  if (node._innerHTML && node._innerHTML.includes(payload.preexistingModelId)) {
+    preexistingVisible = true;
+  }
+  if (node.textContent && String(node.textContent).includes(payload.preexistingModelId)) {
+    preexistingVisible = true;
+  }
+  // Recurse into children
+  if (node.children && node.children.length) {
+    for (const child of node.children) walk(child, depth+1);
+  }
+};
+walk(dropdown);
+const expanded = findInTree(dropdown, node => String(node._innerHTML || '').includes('Show all'));
+showAllGone = !expanded;
+
+process.stdout.write(JSON.stringify({
+  preexistingVisible,
+  showAllGone,
+}));
+"""
+
+
+@pytest.fixture(scope="module")
+def _driver_paths(tmp_path_factory):
+    driver_dir = tmp_path_factory.mktemp("issue3691_drivers")
+    dropdown_path = driver_dir / "driver.js"
+    dropdown_path.write_text(_DROPDOWN_DRIVER, encoding="utf-8")
+    inplace_path = driver_dir / "driver_inplace.js"
+    inplace_path.write_text(_INPLACE_DRIVER, encoding="utf-8")
+    endpoint_error_path = driver_dir / "driver_endpoint_error.js"
+    endpoint_error_path.write_text(_INPLACE_ENDPOINT_ERROR_DRIVER, encoding="utf-8")
+    preexisting_path = driver_dir / "driver_preexisting.js"
+    preexisting_path.write_text(_INPLACE_PREEXISTING_DRIVER, encoding="utf-8")
+    return {
+        "dropdown": str(dropdown_path),
+        "inplace": str(inplace_path),
+        "endpoint_error": str(endpoint_error_path),
+        "preexisting": str(preexisting_path),
+    }
+
 
 @pytest.fixture(scope="module")
 def _dropdown_driver_path(tmp_path_factory):
@@ -553,4 +1473,128 @@ def test_runtime_picker_excludes_configured_hidden_models_from_show_all_count(
     )
     assert "Show all 2 models" not in initial_html, (
         "The show-all label must not over-report configured hidden overflow models."
+    )
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_runtime_inplace_expand_then_search_clear_preserves_expanded_group(_driver_paths):
+    """Test that in-place expansion path preserves expanded state through search→clear cycle.
+
+    Verifies the _modelData.hiddenByDefault flip (ui.js:2378-2381) and hiddenCount=0
+    sync (ui.js:2383-2385) so the group doesn't snap back to capped view after clearing.
+    """
+    payload = {
+        "groups": [
+            {
+                "provider": "OpenRouter",
+                "provider_id": "openrouter",
+                "models": [
+                    {"id": "openrouter/visible-one", "label": "Visible One"},
+                    {"id": "openrouter/visible-two", "label": "Visible Two"},
+                ],
+                "extra_models": [
+                    {"id": "openrouter/overflow-one", "label": "Overflow One"},
+                    {"id": "openrouter/overflow-two", "label": "Overflow Two"},
+                ],
+            }
+        ],
+        "searchTerm": "overflow",
+    }
+    result = subprocess.run(
+        [NODE, _driver_paths["inplace"], str(REPO / "static" / "ui.js"), json.dumps(payload)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"node inplace driver failed:\nSTDOUT={result.stdout}\nSTDERR={result.stderr}")
+    out = json.loads(result.stdout)
+
+    assert out["initialShowAll"], "Overflow group should show 'Show all' row initially"
+    assert not out["expandedHasShowAll"], "After in-place expansion, 'Show all' row should be gone"
+    assert not out["clearedHasShowAll"], "After search→clear, 'Show all' row should still be gone"
+    assert out["clearedModelCount"] == 4, (
+        "After search→clear following in-place expansion, all 4 models should still be visible "
+        "(2 visible + 2 overflow)"
+    )
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_runtime_inplace_endpoint_error_group_renders_open(_driver_paths):
+    """Test that groups with endpoint error render open by default.
+
+    Verifies the _hasEndpointError gate (ui.js:2552-2555) that opens groups when models
+    failed to fetch, so the user sees the error hint.
+    """
+    payload = {
+        "groups": [
+            {
+                "provider": "OpenRouter",
+                "provider_id": "openrouter",
+                "models": [
+                    {"id": "openrouter/visible-one", "label": "Visible One"},
+                ],
+                "extra_models": [
+                    {"id": "openrouter/overflow-one", "label": "Overflow One"},
+                    {"id": "openrouter/overflow-two", "label": "Overflow Two"},
+                ],
+                "modelsEndpointError": {"message": "fetch failed"},
+            }
+        ],
+        "searchTerm": "",
+    }
+    result = subprocess.run(
+        [NODE, _driver_paths["endpoint_error"], str(REPO / "static" / "ui.js"), json.dumps(payload)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"node endpoint_error driver failed:\nSTDOUT={result.stdout}\nSTDERR={result.stderr}")
+    out = json.loads(result.stdout)
+
+    assert out["groupRendersOpen"], (
+        "Groups with endpoint error should render open by default so the user sees the error hint"
+    )
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+def test_runtime_inplace_expand_with_preexisting_options_reveals_them(_driver_paths):
+    """Test that in-place expansion reveals pre-existing overflow options.
+
+    Verifies the extraModels.length guard (ui.js:2325) which prevents bailing on 0
+    newly-created options when some overflow models already exist as <option>s.
+    """
+    payload = {
+        "groups": [
+            {
+                "provider": "OpenRouter",
+                "provider_id": "openrouter",
+                "models": [
+                    {"id": "openrouter/visible-one", "label": "Visible One"},
+                ],
+                "extra_models": [
+                    {"id": "openrouter/overflow-one", "label": "Overflow One"},
+                    {"id": "openrouter/overflow-two", "label": "Overflow Two"},
+                ],
+            }
+        ],
+        "preexistingModelId": "openrouter/overflow-one",
+        "searchTerm": "",
+    }
+    result = subprocess.run(
+        [NODE, _driver_paths["preexisting"], str(REPO / "static" / "ui.js"), json.dumps(payload)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"node preexisting driver failed:\nSTDOUT={result.stdout}\nSTDERR={result.stderr}")
+    out = json.loads(result.stdout)
+
+    assert out["preexistingVisible"], (
+        "Pre-existing overflow option should be revealed after in-place expansion"
+    )
+    assert out["showAllGone"], (
+        "After expansion, the 'Show all' row should be gone even when some overflow options pre-existed"
     )
