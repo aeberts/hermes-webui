@@ -376,7 +376,17 @@ function _statusCardHtml(card){
 const MESSAGE_RENDER_WINDOW_DEFAULT=50;
 const MESSAGE_VIRTUAL_THRESHOLD_ROWS=80;
 const MESSAGE_VIRTUAL_BUFFER_PX=900;
-const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT=140;
+const MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS={
+  user:120,
+  assistant:160,
+  tool_call:400,
+  default:140,
+};
+function _messageVirtualDefaultHeightForRole(role){
+  return MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS[
+    role&&Object.prototype.hasOwnProperty.call(MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHTS,role)?role:'default'
+  ];
+}
 const MESSAGE_VIRTUAL_MEASUREMENT_MAX_RERENDERS=2;
 let _messageRenderWindowSid=null;
 let _messageRenderWindowSize=MESSAGE_RENDER_WINDOW_DEFAULT;
@@ -384,11 +394,26 @@ let _messageVirtualHeightCache=[];
 let _messageVirtualHeightCacheEntries=[];
 let _messageVirtualHeightCacheLen=0;
 let _messageVirtualHeightCacheSrc=null;
-let _messageVirtualEstimatedRowHeight=MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT;
+let _messageVirtualEstimatedRowHeight=_messageVirtualDefaultHeightForRole('default');
 let _messageVirtualScrollRaf=0;
 let _messageVirtualWindowKey='';
 let _messageVirtualMeasurementCycleKey='';
 let _messageVirtualMeasurementRetryCount=0;
+let _messageVirtualScrollActive=false;
+let _messageVirtualScrollSettleTimer=0;
+let _messageVirtualDeferredMeasurement=null;
+function _markMessageVirtualScrollActive(){
+  _messageVirtualScrollActive=true;
+  clearTimeout(_messageVirtualScrollSettleTimer);
+  _messageVirtualScrollSettleTimer=setTimeout(()=>{
+    _messageVirtualScrollActive=false;
+    if(_messageVirtualDeferredMeasurement){
+      const deferred=_messageVirtualDeferredMeasurement;
+      _messageVirtualDeferredMeasurement=null;
+      _scheduleMessageVirtualMeasurementRefresh(deferred);
+    }
+  },150);
+}
 // Cached visWithIdx array — invalidated when S.messages.length changes.
 let _visWithIdxCache=null;
 let _visWithIdxCacheLen=0;
@@ -403,10 +428,14 @@ function _clearMessageVirtualHeightCache(){
   _messageVirtualHeightCacheEntries=[];
   _messageVirtualHeightCacheLen=0;
   _messageVirtualHeightCacheSrc=null;
-  _messageVirtualEstimatedRowHeight=MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT;
+  _messageVirtualEstimatedRowHeight=_messageVirtualDefaultHeightForRole('default');
   _messageVirtualWindowKey='';
   _messageVirtualMeasurementCycleKey='';
   _messageVirtualMeasurementRetryCount=0;
+  _messageVirtualScrollActive=false;
+  clearTimeout(_messageVirtualScrollSettleTimer);
+  _messageVirtualScrollSettleTimer=0;
+  _messageVirtualDeferredMeasurement=null;
 }
 function _resetMessageRenderWindow(sid){
   _messageRenderWindowSid=sid||null;
@@ -450,15 +479,17 @@ function _getVisibleMessagesWithIdx(){
 function _messageVirtualWindow(opts){
   const total=Math.max(0, Number(opts&&opts.total)||0);
   const threshold=Math.max(1, Number(opts&&opts.threshold)||MESSAGE_VIRTUAL_THRESHOLD_ROWS);
-  const defaultHeight=Math.max(1, Number(opts&&opts.defaultHeight)||MESSAGE_VIRTUAL_DEFAULT_ROW_HEIGHT);
+  const defaultHeight=Math.max(1, Number(opts&&opts.defaultHeight)||_messageVirtualDefaultHeightForRole('default'));
   const bufferPx=Math.max(0, Number(opts&&opts.bufferPx)||MESSAGE_VIRTUAL_BUFFER_PX);
   const viewportHeight=Math.max(defaultHeight, Number(opts&&opts.viewportHeight)||defaultHeight*6);
   const keepTailCount=Math.max(0, Number(opts&&opts.keepTailCount)||0);
   const tailStart=Math.max(0, total-keepTailCount);
   const heights=Array.isArray(opts&&opts.heights)?opts.heights:[];
+  const roleForIdx=typeof (opts&&opts.roleForIdx)==='function'?opts.roleForIdx:null;
   const rowHeightFor=(idx)=>{
     const cached=Number(heights[idx]);
-    return Number.isFinite(cached)&&cached>0?cached:defaultHeight;
+    if(Number.isFinite(cached)&&cached>0) return cached;
+    return roleForIdx?Math.max(1,_messageVirtualDefaultHeightForRole(roleForIdx(idx))):defaultHeight;
   };
   if(total<=Math.max(threshold, keepTailCount)){
     return {virtualized:false,start:0,end:total,topPad:0,bottomPad:0,total,tailStart};
@@ -524,6 +555,10 @@ function _messageVirtualMeasurementCycleKeyFor(windowMetrics){
   ].join(':');
 }
 function _scheduleMessageVirtualMeasurementRefresh(windowMetrics){
+  if(_messageVirtualScrollActive){
+    _messageVirtualDeferredMeasurement=windowMetrics;
+    return;
+  }
   const cycleKey=_messageVirtualMeasurementCycleKeyFor(windowMetrics);
   if(_messageVirtualMeasurementCycleKey!==cycleKey){
     _messageVirtualMeasurementCycleKey=cycleKey;
@@ -609,6 +644,19 @@ function _syncMessageVirtualHeightCache(visWithIdx){
   _messageVirtualHeightCacheLen=S.messages.length;
   _messageVirtualHeightCacheSrc=S.messages;
 }
+function _messageVirtualRoleForEntry(entry){
+  const m=entry&&entry.m;
+  if(!m) return 'default';
+  if(m.role==='user') return 'user';
+  if(m.role==='assistant'){
+    if((Array.isArray(m.tool_calls)&&m.tool_calls.length>0)||
+       (Array.isArray(m.content)&&m.content.some(p=>p&&p.type==='tool_use'))||
+       (Array.isArray(m._partial_tool_calls)&&m._partial_tool_calls.length>0))
+      return 'tool_call';
+    return 'assistant';
+  }
+  return 'default';
+}
 function _currentMessageVirtualWindow(visWithIdx, keepTailCount){
   _syncMessageVirtualHeightCache(visWithIdx);
   const container=$('messages');
@@ -627,6 +675,7 @@ function _currentMessageVirtualWindow(visWithIdx, keepTailCount){
     viewportHeight:container?container.clientHeight:(_messageVirtualEstimatedRowHeight*6),
     heights:_messageVirtualHeightCache,
     defaultHeight:_messageVirtualEstimatedRowHeight,
+    roleForIdx:idx=>_messageVirtualRoleForEntry(visWithIdx[idx]),
     keepTailCount,
   });
 }
@@ -640,7 +689,7 @@ function _messageVirtualPrependedHeightDelta(prependedRenderableCount){
   let total=0;
   for(let i=0;i<limit;i++){
     const cached=Number(_messageVirtualHeightCache[i]);
-    total+=(Number.isFinite(cached)&&cached>0)?cached:_messageVirtualEstimatedRowHeight;
+    total+=(Number.isFinite(cached)&&cached>0)?cached:_messageVirtualDefaultHeightForRole(_messageVirtualRoleForEntry(visWithIdx[i]));
   }
   return Math.max(0,Math.round(total));
 }
@@ -658,7 +707,7 @@ function _messageVirtualScrollTopForVisibleIdx(visWithIdx, visibleIdx, container
   let offset=0;
   for(let i=0;i<limit;i++){
     const cached=Number(_messageVirtualHeightCache[i]);
-    offset+=(Number.isFinite(cached)&&cached>0)?cached:_messageVirtualEstimatedRowHeight;
+    offset+=(Number.isFinite(cached)&&cached>0)?cached:_messageVirtualDefaultHeightForRole(_messageVirtualRoleForEntry(visWithIdx[i]));
   }
   const viewport=container?Math.max(0,Number(container.clientHeight)||0):0;
   return Math.max(0,Math.round(offset-(viewport*0.35)));
@@ -695,6 +744,25 @@ function _restoreMessageViewportAnchor(anchor, rawIdxDelta){
   container.scrollTop+=(rect.top-containerRect.top)-targetTop;
   requestAnimationFrame(()=>{ _programmaticScroll=false; });
   return true;
+}
+function _compensateScrollForMeasurementDelta(renderFn){
+  const container=$('messages');
+  if(!container) return renderFn();
+  const anchorBefore=_captureMessageViewportAnchor();
+  const scrollTopBefore=container.scrollTop;
+  renderFn();
+  if(!anchorBefore) return;
+  const row=container.querySelector(`[data-msg-idx="${anchorBefore.rawIdx}"]`);
+  if(!row) return;
+  const containerRect=container.getBoundingClientRect();
+  const rowRect=row.getBoundingClientRect();
+  const actualOffset=rowRect.top-containerRect.top;
+  const delta=actualOffset-anchorBefore.topOffset;
+  if(Math.abs(delta)<2) return;
+  _programmaticScroll=true;
+  container.scrollTop=scrollTopBefore+delta;
+  _lastScrollTop=container.scrollTop;
+  requestAnimationFrame(()=>{ setTimeout(()=>{ _programmaticScroll=false; },0); });
 }
 function _messageViewportIntersectsRenderedRow(){
   const container=$('messages');
@@ -771,7 +839,7 @@ function _scheduleMessageVirtualizedRender(force){
     const liveWindow=_currentMessageVirtualWindow(liveVisWithIdx,_messageVirtualKeepTailCount());
     const liveKey=_messageVirtualWindowKeyFor(liveWindow);
     if(!force&&liveKey===_messageVirtualWindowKey) return;
-    renderMessages({ preserveScroll:true });
+    _compensateScrollForMeasurementDelta(()=>{ renderMessages({ preserveScroll:true }); });
   });
 }
 
@@ -3535,6 +3603,7 @@ if(typeof window!=='undefined'){
   let _scrollRaf=0;
   el.addEventListener('scroll',()=>{
     if(_programmaticScroll) return; // ignore scrolls we triggered ourselves
+    _markMessageVirtualScrollActive();
     cancelAnimationFrame(_scrollRaf);
     _scrollRaf=requestAnimationFrame(()=>{
       const top=el.scrollTop;
