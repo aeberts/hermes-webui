@@ -696,6 +696,40 @@ def get_profile_runtime_env(home: Path) -> dict[str, str]:
     return env
 
 
+# Match Hermes Agent gateway behavior: profile-scoped WebUI runs should
+# project intended runtime vars (credentials, HERMES_HOME, TERMINAL_*)
+# without allowing profile env to override core shell identity variables
+# like HOME or PATH.
+_BLOCKED_RUNTIME_ENV_KEYS = {
+    'HOME',
+    'PATH',
+    'PWD',
+    'SHELL',
+    'USER',
+    'LOGNAME',
+    'SHLVL',
+    'OLDPWD',
+    'PYTHONPATH',
+    'VIRTUAL_ENV',
+    'LD_LIBRARY_PATH',
+}
+
+
+def filter_runtime_env_for_gateway_parity(env: dict[str, str]) -> dict[str, str]:
+    """Return a profile runtime env filtered to mimic Hermes gateway semantics."""
+    filtered: dict[str, str] = {}
+    for key, value in (env or {}).items():
+        k = str(key).strip()
+        if not k:
+            continue
+        if k in _BLOCKED_RUNTIME_ENV_KEYS:
+            continue
+        if k.startswith('XDG_'):
+            continue
+        filtered[k] = value
+    return filtered
+
+
 @contextmanager
 def profile_env_for_background_worker(
     session,
@@ -724,6 +758,7 @@ def profile_env_for_background_worker(
 
         profile_home_path = Path(get_hermes_home_for_profile(profile))
         runtime_env = get_profile_runtime_env(profile_home_path)
+        safe_runtime_env = filter_runtime_env_for_gateway_parity(runtime_env)
     except Exception:
         log.debug(
             "Failed to resolve profile env for %s profile %s; falling back to current env",
@@ -734,7 +769,7 @@ def profile_env_for_background_worker(
         yield
         return
 
-    thread_env = dict(runtime_env)
+    thread_env = dict(safe_runtime_env)
     thread_env["HERMES_HOME"] = str(profile_home_path)
     # Hybrid profile routing: keep the broad runtime env in WebUI's thread-local
     # channel for WebUI helpers, and also mirror it into process env for the
@@ -749,11 +784,11 @@ def profile_env_for_background_worker(
     try:
         _set_thread_env(**thread_env)
         with _ENV_LOCK:
-            old_runtime_env = {key: os.environ.get(key) for key in runtime_env}
+            old_runtime_env = {key: os.environ.get(key) for key in safe_runtime_env}
             had_hermes_home = "HERMES_HOME" in os.environ
             old_hermes_home = os.environ.get("HERMES_HOME")
             skill_home_snapshot = snapshot_skill_home_modules()
-            os.environ.update(runtime_env)
+            os.environ.update(safe_runtime_env)
             os.environ["HERMES_HOME"] = str(profile_home_path)
             try:
                 patch_skill_home_modules(profile_home_path)
