@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.499] — 2026-06-18 — Release RI (archiving a parent hides its stranded child rows)
+
+### Fixed
+
+- **Archiving a parent conversation no longer leaves child, delegate, or fork rows stranded in the sidebar (#4293).** The sidebar now checks the active project/session set before rendering orphan child rows, suppresses children whose archived parent is intentionally hidden, and clears stale child-session decorations during each render rebuild. This is a display-only change (the rows reappear when "show archived" is on); it does not alter any session's archived state. Thanks @santastabber.
+
 ## [v0.51.498] — 2026-06-18 — Release RH (profile runtime env no longer clobbers core shell identity)
 
 ### Fixed
@@ -46,7 +52,6 @@
 ### Fixed
 
 - **Reloading a session with a large model context window no longer snaps it back to the 256k fallback (#4248).** The session reload path now resolves context-window metadata with the same base URL / API-key lookup inputs used by streaming saves, and it refuses to overwrite a larger persisted context window with the generic 256k fallback. The reload model-identity check also normalizes slash-qualified model ids (`provider/model`, OpenRouter-style) so a slash-stored model resolving to its bare id is not mistaken for a model change. Thanks @franksong2702.
-
 ## [v0.51.489] — 2026-06-18 — Release QY (outline button no longer collides with the scroll control)
 
 ### Fixed

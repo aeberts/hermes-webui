@@ -4720,12 +4720,25 @@ function _sessionStateTooltip({isStreaming=false,hasUnread=false}={}){
   return '';
 }
 
-function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions){
-  const sessionIdsInList=new Set((rawSessions||[]).map(s=>s&&s.session_id).filter(Boolean));
-  const rawSessionsById=new Map((rawSessions||[]).filter(s=>s&&s.session_id).map(s=>[s.session_id,s]));
+function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions, rawReferenceSessions){
+  const referenceSessions=Array.isArray(rawReferenceSessions)?rawReferenceSessions:(rawSessions||[]);
+  const sessionIdsInList=new Set(referenceSessions.map(s=>s&&s.session_id).filter(Boolean));
+  const rawSessionsById=new Map(referenceSessions.filter(s=>s&&s.session_id).map(s=>[s.session_id,s]));
+  const cleanSidebarRow=(s)=>{
+    const row={...s};
+    // Child-session decoration is render-derived.  Drop stale copies so an
+    // archived child disappears immediately on the next list rebuild instead of
+    // lingering under a copied parent row (#4293).
+    delete row._child_sessions;
+    delete row._child_session_count;
+    delete row._child_session_streaming;
+    delete row._child_session_has_unread;
+    delete row._child_session_attention;
+    return row;
+  };
   const rows=(collapsedRows||[])
     .filter(s=>!_isChildSession(s)&&((s&&s.pinned)||!_isForkWithResolvableParent(s, sessionIdsInList)))
-    .map(s=>({...s}));
+    .map(cleanSidebarRow);
   const isChildStreaming=(childRow)=>typeof _isSessionEffectivelyStreaming==='function'
     ? _isSessionEffectivelyStreaming(childRow)
     : !!(childRow&&(childRow.active_stream_id||childRow.pending_user_message));
@@ -4772,6 +4785,23 @@ function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions){
       if(seg&&seg.session_id) visibleBySegmentSid.set(seg.session_id,{row,seg});
     }
   }
+  const hiddenArchivedChildTree=new Set();
+  const archivedRowsVisible=typeof _showArchived!=='undefined'&&!!_showArchived;
+  const hasHiddenArchivedAncestor=(session)=>{
+    if(!session||!session.session_id||archivedRowsVisible) return false;
+    const seen=new Set();
+    let parentSid=session.parent_session_id;
+    while(parentSid){
+      if(hiddenArchivedChildTree.has(parentSid)) return true;
+      if(seen.has(parentSid)) break;
+      seen.add(parentSid);
+      const rawParent=rawSessionsById.get(parentSid);
+      if(!rawParent) break;
+      if(rawParent.archived) return true;
+      parentSid=rawParent.parent_session_id;
+    }
+    return false;
+  };
   const orphans=[];
   const attachQueue=[...(rawSessions||[])].sort((a,b)=>attachDepthFor(a)-attachDepthFor(b));
   for(const child of attachQueue){
@@ -4791,6 +4821,10 @@ function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions){
     }
     if(!parentRow&&child._parent_lineage_root_id){
       parentRow=visibleByLineageKey.get(child._parent_lineage_root_id)||null;
+    }
+    if(!parentRow&&hasHiddenArchivedAncestor(child)){
+      hiddenArchivedChildTree.add(child.session_id);
+      continue;
     }
     if(parentRow){
       if(!Array.isArray(parentRow._child_sessions)) parentRow._child_sessions=[];
@@ -5128,6 +5162,8 @@ function _partitionSidebarSessionRows(allMatched, activeSidForSidebar){
   let cliSessionCount=0;
   const webuiProfileFiltered=[];
   const cliProfileFiltered=[];
+  const webuiReferenceRaw=[];
+  const cliReferenceRaw=[];
   const webuiSessionsRaw=[];
   const cliSessionsRaw=[];
   let webuiArchivedCount=0;
@@ -5138,6 +5174,7 @@ function _partitionSidebarSessionRows(allMatched, activeSidForSidebar){
     if(isCli) cliSessionCount++;
     if(s.default_hidden&&!(_activeProject&&_activeProject!==NO_PROJECT_FILTER&&s.project_id===_activeProject)) continue;
     const profileFiltered=isCli ? cliProfileFiltered : webuiProfileFiltered;
+    const referenceRaw=isCli ? cliReferenceRaw : webuiReferenceRaw;
     const sessionsRaw=isCli ? cliSessionsRaw : webuiSessionsRaw;
     profileFiltered.push(s);
     if(_activeProject===NO_PROJECT_FILTER){
@@ -5145,6 +5182,7 @@ function _partitionSidebarSessionRows(allMatched, activeSidForSidebar){
     } else if(_activeProject){
       if(s.project_id!==_activeProject) continue;
     }
+    referenceRaw.push(s);
     if(s.archived){
       if(isCli) cliArchivedCount++;
       else webuiArchivedCount++;
@@ -5161,19 +5199,18 @@ function _partitionSidebarSessionRows(allMatched, activeSidForSidebar){
     profileFiltered: showCliOnly ? cliProfileFiltered : webuiProfileFiltered,
     sessionsRaw: showCliOnly ? cliSessionsRaw : webuiSessionsRaw,
     archivedCount: showCliOnly ? cliArchivedCount : webuiArchivedCount,
+    webuiReferenceRaw,
+    cliReferenceRaw,
     webuiSessionsRaw,
     cliSessionsRaw,
   };
 }
 
-function _renderSidebarRowsFromRawSessions(sessionsRaw){
-  return _attachChildSessionsToSidebarRows(_collapseSessionLineageForSidebar(sessionsRaw), sessionsRaw);
+function _renderSidebarRowsFromRawSessions(sessionsRaw, referenceSessionsRaw){
+  const referenceRows=Array.isArray(referenceSessionsRaw)?referenceSessionsRaw:sessionsRaw;
+  return _attachChildSessionsToSidebarRows(_collapseSessionLineageForSidebar(sessionsRaw), sessionsRaw, referenceRows);
 }
 
-function _countRenderedSidebarRowsFromRawSessions(sessionsRaw){
-  // Keep inactive-tab chip counts on the exact same top-level row path as render.
-  return _renderSidebarRowsFromRawSessions(sessionsRaw).length;
-}
 
 function renderSessionListFromCache(){
   // Don't re-render while user is actively renaming a session (would destroy the input)
@@ -5202,16 +5239,19 @@ function renderSessionListFromCache(){
     profileFiltered,
     sessionsRaw,
     archivedCount,
+    webuiReferenceRaw,
+    cliReferenceRaw,
     webuiSessionsRaw,
     cliSessionsRaw,
   }=_partitionSidebarSessionRows(allMatched, activeSidForSidebar);
-  const sessions=_renderSidebarRowsFromRawSessions(sessionsRaw);
+  const referenceRaw=_sessionSourceFilter==='cli'?cliReferenceRaw:webuiReferenceRaw;
+  const sessions=_renderSidebarRowsFromRawSessions(sessionsRaw, referenceRaw);
   const renderedWebuiSessionCount=_sessionSourceFilter==='webui'
     ? sessions.length
-    : _countRenderedSidebarRowsFromRawSessions(webuiSessionsRaw);
+    : _renderSidebarRowsFromRawSessions(webuiSessionsRaw, webuiReferenceRaw).length;
   const renderedCliSessionCount=_sessionSourceFilter==='cli'
     ? sessions.length
-    : _countRenderedSidebarRowsFromRawSessions(cliSessionsRaw);
+    : _renderSidebarRowsFromRawSessions(cliSessionsRaw, cliReferenceRaw).length;
   _syncSidebarExpansionForActiveSession(sessions, activeSidForSidebar);
   const list=$('sessionList');
   const animateRefresh=_sessionListRefreshAnimationPending;
