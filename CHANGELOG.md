@@ -3,6 +3,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Post-start streaming errors in the browser no longer hide active streams after a successful `/api/chat/start` (#4481).** If browser-side bookkeeping after stream start throws, it is now logged as recoverable and `attachLiveStream(activeSid, streamId, uploadedNames)` still runs when `stream_id` is available, so a transient UI exception cannot clear the send state or prevent live tokens from attaching.
+
 ## [v0.51.513] — 2026-06-19 — Release RX (credential-pool quota status for all pooled providers)
 
 ### Added

@@ -898,6 +898,16 @@ function _runOptionalPreStartUiStep(label, fn){
   }
 }
 
+function _runOptionalPostStartUiStep(label, fn){
+  try{
+    return typeof fn==='function'?fn():undefined;
+  }catch(e){
+    const message=e&&e.message?e.message:String(e||'unknown error');
+    try{console.warn('[webui] optional post-start UI step failed', label, message);}catch(_){ }
+    return undefined;
+  }
+}
+
 function _sessionTitleLooksDefaultOrProvisional(titleText, provisionalText){
   const title=String(titleText||'').replace(/\s+/g,' ').trim();
   if(!title||title==='Untitled'||title==='New Chat')return true;
@@ -1248,8 +1258,12 @@ async function send(){
 
   // Start the agent via POST, get a stream_id back
   let streamId;
+  let postStartData;
+  let modelStateForPostStart;
+  let explicitPickForPostStart;
   try{
     const _modelState=_chatPayloadModelState();
+    modelStateForPostStart=_modelState;
     const _pendingPick=(typeof _readPendingSessionModel==='function')
       ? _readPendingSessionModel(activeSid)
       : null;
@@ -1262,6 +1276,7 @@ async function send(){
     // once read so a later send of an unchanged dropdown isn't treated as an explicit
     // pick. (#3739/#3737, Codex catch)
     if(_explicitPick && typeof _clearPendingSessionModel==='function') _clearPendingSessionModel(activeSid);
+    explicitPickForPostStart=_explicitPick;
     const startData=await api('/api/chat/start',{method:'POST',body:JSON.stringify({
       session_id:activeSid,message:msgText,
       // S.session.model remains authoritative; the helper only resolves a
@@ -1272,63 +1287,7 @@ async function send(){
       explicit_model_pick:_explicitPick||undefined,
       attachments:uploaded.length?uploaded:undefined
     })});
-
-    if(startData.title) applySessionTitleUpdate(activeSid, startData.title, {provisionalText:displayText.slice(0,64), rememberProvisional:true});
-
-    if(startData.effective_model && S.session){
-      const _sentModel=_modelState.model;
-      if(_explicitPick && _sentModel && startData.effective_model!==_sentModel && typeof showToast==='function'){
-        showToast('Model '+_sentModel+' changed to '+startData.effective_model+' — profile provider mismatch', 5000);
-      }
-      S.session.model=startData.effective_model;
-      S.session.model_provider=startData.effective_model_provider||S.session.model_provider||null;
-      localStorage.setItem('hermes-webui-model', startData.effective_model);
-      if(typeof _writePersistedModelState==='function') _writePersistedModelState(startData.effective_model,S.session.model_provider||null);
-      if($('modelSelect')) _applyModelToDropdown(startData.effective_model, $('modelSelect'),S.session.model_provider||null);
-      if(typeof syncTopbar==='function') syncTopbar();
-    }else if(startData.effective_model_provider && S.session){
-      S.session.model_provider=startData.effective_model_provider;
-      if(typeof _writePersistedModelState==='function') _writePersistedModelState(S.session.model||'',S.session.model_provider||null);
-      if($('modelSelect')&&typeof _applyModelToDropdown==='function') _applyModelToDropdown(S.session.model||'', $('modelSelect'), S.session.model_provider||null);
-      if(typeof syncModelChip==='function') syncModelChip();
-      if(typeof syncTopbar==='function') syncTopbar();
-    }
-    streamId=startData.stream_id;
-    S.activeStreamId = streamId;
-    if(typeof appendThinking==='function') appendThinking('',{pending:true});
-    // setBusy(true) already ran with activeStreamId=null; refresh now that we
-    // have a stream id so the primary button can switch to Stop (see getComposerPrimaryAction).
-    if(typeof updateSendBtn==='function') updateSendBtn();
-    if(S.session&&typeof startData.pending_started_at==='number'){
-      S.session.pending_started_at=startData.pending_started_at;
-    }
-    if(S.session&&S.session.session_id===activeSid){
-      S.session.active_stream_id = streamId;
-    }
-    if(S.session&&S.session.session_id===activeSid&&typeof showLiveRunStatus==='function'){
-      const _startedAt=typeof startData.pending_started_at==='number'
-        ? startData.pending_started_at
-        : (S.session.pending_started_at||Date.now()/1000);
-      showLiveRunStatus(activeSid,{startedAt:_startedAt});
-    }
-    if(typeof upsertActiveSessionForLocalTurn==='function'){
-      // Third optimistic pass: stream_id is now known, so the row can reconcile
-      // against real active-stream metadata before the background refresh lands.
-      upsertActiveSessionForLocalTurn({title:S.session&&S.session.title||displayText.slice(0,64),messageCount:S.messages.length,timestampMs:Date.now()});
-    }
-    if(!INFLIGHT[activeSid]){
-      INFLIGHT[activeSid]={messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]};
-    }
-    const currentInflight=INFLIGHT[activeSid];
-    markInflight(activeSid, streamId);
-    if(typeof saveInflightState==='function'){
-      saveInflightState(activeSid,{streamId,messages:currentInflight.messages||optimisticMessages,uploaded:uploadedNames,toolCalls:currentInflight.toolCalls||[]});
-    }
-    // Refresh session list so background streaming indicators appear immediately for the
-    // session that was just started and any others that may already be running.
-    if(typeof renderSessionList === 'function') {
-      void renderSessionList();
-    }
+    postStartData = startData;
   }catch(e){
     const errMsg=String((e&&e.message)||'');
     // If /api/chat/start returns 404, the session was deleted server-side
@@ -1391,6 +1350,70 @@ async function send(){
     if(typeof renderSessionList==='function') void renderSessionList();
     return;
   }
+
+  const startData = postStartData || {};
+  streamId = postStartData ? postStartData.stream_id : null;
+  S.activeStreamId = streamId;
+  // setBusy(true) already ran with activeStreamId=null; refresh now that we
+  // have a stream id so the primary button can switch to Stop (see
+  // getComposerPrimaryAction).
+  if(typeof updateSendBtn==='function') updateSendBtn();
+  _runOptionalPostStartUiStep('post-start ui/bookkeeping', ()=>{
+    const _modelState=modelStateForPostStart || _chatPayloadModelState();
+    const _explicitPick=explicitPickForPostStart;
+    if(startData&&startData.title) applySessionTitleUpdate(activeSid, startData.title, {provisionalText:displayText.slice(0,64), rememberProvisional:true});
+
+    if(startData&&startData.effective_model && S.session){
+      const _sentModel=_modelState&&_modelState.model;
+      if(_explicitPick && _sentModel && startData.effective_model!==_sentModel && typeof showToast==='function'){
+        showToast('Model '+_sentModel+' changed to '+startData.effective_model+' — profile provider mismatch', 5000);
+      }
+      S.session.model=startData.effective_model;
+      S.session.model_provider=startData.effective_model_provider||S.session.model_provider||null;
+      localStorage.setItem('hermes-webui-model', startData.effective_model);
+      if(typeof _writePersistedModelState==='function') _writePersistedModelState(startData.effective_model,S.session.model_provider||null);
+      if($('modelSelect')) _applyModelToDropdown(startData.effective_model, $('modelSelect'),S.session.model_provider||null);
+      if(typeof syncTopbar==='function') syncTopbar();
+    }else if(startData&&startData.effective_model_provider && S.session){
+      S.session.model_provider=startData.effective_model_provider;
+      if(typeof _writePersistedModelState==='function') _writePersistedModelState(S.session.model||'',S.session.model_provider||null);
+      if($('modelSelect')&&typeof _applyModelToDropdown==='function') _applyModelToDropdown(S.session.model||'', $('modelSelect'), S.session.model_provider||null);
+      if(typeof syncModelChip==='function') syncModelChip();
+      if(typeof syncTopbar==='function') syncTopbar();
+    }
+
+    if(typeof appendThinking==='function') appendThinking('',{pending:true});
+    if(S.session&&typeof startData.pending_started_at==='number'){
+      S.session.pending_started_at=startData.pending_started_at;
+    }
+    if(S.session&&S.session.session_id===activeSid){
+      S.session.active_stream_id = streamId;
+    }
+    if(S.session&&S.session.session_id===activeSid&&typeof showLiveRunStatus==='function'){
+      const _startedAt=typeof startData?.pending_started_at==='number'
+        ? startData.pending_started_at
+        : (S.session.pending_started_at||Date.now()/1000);
+      showLiveRunStatus(activeSid,{startedAt:_startedAt});
+    }
+    if(typeof upsertActiveSessionForLocalTurn==='function'){
+      // Third optimistic pass: stream_id is now known, so the row can reconcile
+      // against real active-stream metadata before the background refresh lands.
+      upsertActiveSessionForLocalTurn({title:S.session&&S.session.title||displayText.slice(0,64),messageCount:S.messages.length,timestampMs:Date.now()});
+    }
+    if(!INFLIGHT[activeSid]){
+      INFLIGHT[activeSid]={messages:optimisticMessages,uploaded:uploadedNames,toolCalls:[]};
+    }
+    const currentInflight=INFLIGHT[activeSid];
+    markInflight(activeSid, streamId);
+    if(typeof saveInflightState==='function'){
+      saveInflightState(activeSid,{streamId,messages:currentInflight.messages||optimisticMessages,uploaded:uploadedNames,toolCalls:currentInflight.toolCalls||[]});
+    }
+    // Refresh session list so background streaming indicators appear immediately for the
+    // session that was just started and any others that may already be running.
+    if(typeof renderSessionList === 'function') {
+      void renderSessionList();
+    }
+  });
 
   // Open SSE stream and render tokens live
   attachLiveStream(activeSid, streamId, uploadedNames);

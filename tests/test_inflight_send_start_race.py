@@ -106,6 +106,27 @@ def test_pre_start_optimistic_block_cannot_prevent_chat_start():
     )
 
 
+def test_post_start_bookkeeping_errors_cannot_block_live_attach():
+    """Any optional post-start UI/bookkeeping failure should be recoverable once stream_id exists."""
+    body = _function_body(MESSAGES_JS, "send")
+    helper_body = _function_body(MESSAGES_JS, "_runOptionalPostStartUiStep")
+    assert "optional post-start UI step failed" in helper_body, (
+        "post-start optional helper failures should stay in warning logs, not user-facing error bubbles"
+    )
+
+    chat_start_idx = body.index("const startData=await api('/api/chat/start'")
+    catch_idx = body.index("}catch(e){", chat_start_idx)
+    optional_idx = body.index("_runOptionalPostStartUiStep('post-start ui/bookkeeping'", catch_idx)
+    stream_id_idx = body.index("streamId = postStartData ? postStartData.stream_id : null;", catch_idx)
+    attach_idx = body.index("attachLiveStream(activeSid, streamId, uploadedNames);")
+    assert catch_idx < stream_id_idx < optional_idx < attach_idx, (
+        "stream-id setup, post-start UI/bookkeeping, and attach must run after successful API catch"
+    )
+    assert "S.messages.push({role:'assistant',content:`**Error:**" not in body[optional_idx : attach_idx], (
+        "post-start optional failures should not append assistant error messages before stream attach"
+    )
+
+
 def test_server_absent_optimistic_first_turn_rows_are_not_kept_forever():
     """A local first-turn sidebar row must expire when /api/chat/start never persisted it."""
     body = _function_body(SESSIONS_JS, "_mergeOptimisticFirstTurnSessions")
