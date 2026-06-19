@@ -1015,7 +1015,8 @@ def switch_profile(name: str, *, process_wide: bool = True) -> dict:
             WebUI where the profile is managed via cookie + thread-local (#798).
 
     Returns: {'profiles': [...], 'active': name}
-    Raises PermissionError if profile doesn't exist or agent is busy.
+    Raises ValueError when profile doesn't exist, RuntimeError when agent is running,
+    PermissionError in isolated mode for cross-profile switches.
     """
     global _active_profile
 
@@ -1359,7 +1360,7 @@ def list_profiles_api() -> list:
                         'enabled_skills': enabled_count,
                         'total_skills': total_count,
                     }]
-        except ImportError:
+        except (ImportError, OSError, PermissionError):
             pass
         # Fallback: construct profile dict with actual active name and hermes_home path
         enabled_count, total_count = _get_profile_skills_stats(hermes_home)

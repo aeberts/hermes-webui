@@ -10115,7 +10115,7 @@ def handle_post(handler, parsed) -> bool:
             )
             return j(handler, {"ok": True, "profile": result})
         except PermissionError as e:
-            return bad(handler, str(e), 403)
+            return bad(handler, _sanitize_error(e), 403)
         except (ValueError, FileExistsError, RuntimeError) as e:
             return bad(handler, str(e))
 
