@@ -4618,7 +4618,10 @@ def _load_stale_models_cache_from_disk() -> dict | None:
     The main cache loader enforces metadata stamps for a full cold-path cache hit.
     This helper intentionally does not apply that stricter policy, so we can still
     recover a useful fallback payload when the strict loader rejected cache because
-    metadata or fingerprint fields are stale.
+    metadata or fingerprint fields are stale. It DOES still enforce the schema
+    version: a cross-schema cache can have an incompatible groups/badge shape, so
+    serving it to the picker could surface a broken catalog — schema mismatch is a
+    hard reject even on the fallback path.
     """
     try:
         import json as _j
@@ -4629,6 +4632,8 @@ def _load_stale_models_cache_from_disk() -> dict | None:
         with open(cache_path, encoding="utf-8") as f:
             cache = _j.load(f)
         if not _is_valid_models_cache(cache):
+            return None
+        if cache.get("_schema_version") != _MODELS_CACHE_SCHEMA_VERSION:
             return None
         aliases = cache.get("aliases")
         return {
