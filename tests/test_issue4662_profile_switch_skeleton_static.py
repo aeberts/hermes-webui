@@ -277,6 +277,30 @@ class TestSwitchRaceGuards:
             "skeleton flag must be cleared before the failure-restore render"
         )
 
+    def test_switch_invalidates_inflight_renders_before_skeleton(self):
+        # Race-2 (in-flight variant, Codex re-gate 2): a renderSessionList() already in
+        # flight BEFORE the switch (old profile's /api/sessions) would resolve, pass the
+        # generation guard (its _gen still current — the switch hasn't bumped it yet),
+        # clear the skeleton flag, and paint stale rows. switchToProfile must invalidate
+        # in-flight/queued renders at switch start, BEFORE showing the skeleton.
+        assert "function _invalidateSessionListRenders(){" in SESSIONS, (
+            "must have a helper that invalidates in-flight/queued session-list renders"
+        )
+        inv = SESSIONS[SESSIONS.index("function _invalidateSessionListRenders(){"):]
+        inv = inv[: inv.index("\n}")]
+        assert "_renderSessionListGen++" in inv, "invalidation must bump the render generation"
+        assert "_pendingSessionListPayload = null" in inv, "invalidation must drop a deferred payload"
+        assert "_renderSessionListQueuedRequest = null" in inv, "invalidation must drop the queued request"
+        # ...and the switch must call it BEFORE showSessionListSkeleton(). Anchor on the
+        # actual call guard (not the bare name, which also appears in nearby comments).
+        body = _switch_body()
+        inv_pos = body.find("_invalidateSessionListRenders === 'function')")
+        skel_pos = body.find("showSessionListSkeleton === 'function')")
+        assert inv_pos != -1, "switchToProfile must invalidate in-flight renders at switch start"
+        assert skel_pos != -1 and inv_pos < skel_pos, (
+            "the in-flight invalidation must run BEFORE the skeleton is shown"
+        )
+
     def test_workspace_tree_generation_token_guards_loaddir(self):
         # Race-1 (CORE): an empty-session profile switch reuses the same session_id, so
         # loadDir()'s session_id guard alone can't reject a stale pre-switch /api/list.

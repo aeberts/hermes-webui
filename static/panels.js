@@ -5936,6 +5936,11 @@ async function switchToProfile(name) {
   // context change where dismissing those transient affordances is correct.
   if (typeof _renamingSid !== 'undefined' && _renamingSid) _renamingSid = null;
   if (typeof closeSessionActionMenu === 'function') closeSessionActionMenu();
+  // #4671 CORE: invalidate any in-flight/queued session-list render BEFORE showing the
+  // skeleton, so a pre-switch /api/sessions response (old profile's rows, issued before
+  // the switch) can't resolve, pass the generation guard, clear the skeleton flag, and
+  // paint stale rows over the skeleton. Must precede showSessionListSkeleton().
+  if (typeof _invalidateSessionListRenders === 'function') _invalidateSessionListRenders();
   if (typeof showSessionListSkeleton === 'function') showSessionListSkeleton();
   const _workspaceVisibleAtStart = typeof _workspacePanelMode !== 'undefined' && _workspacePanelMode !== 'closed';
   // #4671 CORE: invalidate any in-flight workspace-tree load UNCONDITIONALLY at switch

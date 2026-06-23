@@ -3488,6 +3488,20 @@ let _sessionListRefreshAnimationPending = false;
 let _sessionListFirstRenderAnimated = false;
 let _sessionListEnterAllAnimationPending = false;
 
+// #4671: invalidate any session-list render that is in flight or queued. Called at
+// profile-switch start (with showSessionListSkeleton) so a pre-switch /api/sessions
+// response — which carries the OLD profile's rows but was issued before the switch
+// bumped the generation, so it would otherwise pass the _renderSessionListGen guard,
+// clear the skeleton flag, and paint stale rows over the skeleton — is discarded.
+// Bumping the generation makes every outstanding response stale; clearing the
+// pending/queued payloads drops a deferred apply that would do the same.
+function _invalidateSessionListRenders(){
+  _renderSessionListGen++;
+  _pendingSessionListPayload = null;
+  _renderSessionListQueuedRequest = null;
+}
+if(typeof window!=='undefined') window._invalidateSessionListRenders = _invalidateSessionListRenders;
+
 function animateNextSessionListRefresh(options={}){
   _sessionListRefreshAnimationPending = true;
   if(options&&options.enterAll) _sessionListEnterAllAnimationPending = true;
