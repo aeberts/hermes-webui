@@ -5941,6 +5941,10 @@ async function switchToProfile(name) {
   // the switch) can't resolve, pass the generation guard, clear the skeleton flag, and
   // paint stale rows over the skeleton. Must precede showSessionListSkeleton().
   if (typeof _invalidateSessionListRenders === 'function') _invalidateSessionListRenders();
+  // ...and set the embargo so a render that STARTS during the switch window (after the
+  // skeleton, before the new-profile cookie is set) also can't paint the old profile's
+  // rows. Cleared right before the switch-owned renderSessionList() and on failure.
+  if (typeof _setProfileSwitchListEmbargo === 'function') _setProfileSwitchListEmbargo(true);
   if (typeof showSessionListSkeleton === 'function') showSessionListSkeleton();
   const _workspaceVisibleAtStart = typeof _workspacePanelMode !== 'undefined' && _workspacePanelMode !== 'closed';
   // #4671 CORE: invalidate any in-flight workspace-tree load UNCONDITIONALLY at switch
@@ -6077,6 +6081,10 @@ async function switchToProfile(name) {
       // Keep topbar chips (workspace/profile) in sync after creating the
       // new profile-scoped session.
       syncTopbar();
+      // #4671: lift the embargo immediately before the switch-owned render — JS is
+      // single-threaded so nothing interleaves between this clear and the call, making
+      // this render the first allowed to paint the new profile's rows.
+      if (typeof _setProfileSwitchListEmbargo === 'function') _setProfileSwitchListEmbargo(false);
       await renderSessionList();
       // Re-check generation after the awaited list render: a newer switch can be
       // started while renderSessionList() is in flight, and without this guard
@@ -6102,6 +6110,8 @@ async function switchToProfile(name) {
       // newer one (Codex gate #4662). renderSessionList() is the slow fetch and
       // has its own internal generation guard, so awaiting it first is fine.
       const workspaceVisible = typeof _workspacePanelMode !== 'undefined' && _workspacePanelMode !== 'closed';
+      // #4671: lift the embargo immediately before the switch-owned render (see above).
+      if (typeof _setProfileSwitchListEmbargo === 'function') _setProfileSwitchListEmbargo(false);
       await renderSessionList();
       if (_switchGen !== _profileSwitchGeneration) return;
       syncTopbar();
@@ -6132,7 +6142,9 @@ async function switchToProfile(name) {
     if (_switchGen === _profileSwitchGeneration) {
       // The switch failed; _allSessions still holds the (still-current) previous
       // profile, so clear the skeleton flag and re-render to restore the real list
-      // rather than strand the up-front skeleton (#4671).
+      // rather than strand the up-front skeleton (#4671). Lift the embargo too so the
+      // restore render (and subsequent normal renders) can paint.
+      if (typeof _setProfileSwitchListEmbargo === 'function') _setProfileSwitchListEmbargo(false);
       _sessionListSkeletonActive = false;
       if (typeof renderSessionListFromCache === 'function') renderSessionListFromCache();
       if (_workspaceVisibleAtStart && S.session && S.session.workspace && typeof loadDir === 'function') {
@@ -6148,6 +6160,13 @@ async function switchToProfile(name) {
     // Always remove loading indicator regardless of success or failure
     if (_switchGen === _profileSwitchGeneration && _chip) { _chip.classList.remove('switching'); _chip.disabled = false; }
     if (_switchGen === _profileSwitchGeneration && _titlebarBtn) { _titlebarBtn.classList.remove('switching'); _titlebarBtn.disabled = false; }
+    // #4671 safety net: guarantee the session-list embargo is lifted on EVERY exit of the
+    // current switch (success paths clear it before their authoritative render; this covers
+    // early-returns/throws between skeleton-show and those clears so it can't freeze the
+    // sidebar). Guarded by _switchGen so a superseded switch can't lift a newer switch's embargo.
+    if (_switchGen === _profileSwitchGeneration && typeof _setProfileSwitchListEmbargo === 'function') {
+      _setProfileSwitchListEmbargo(false);
+    }
   }
 }
 

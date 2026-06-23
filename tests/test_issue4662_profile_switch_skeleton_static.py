@@ -301,6 +301,32 @@ class TestSwitchRaceGuards:
             "the in-flight invalidation must run BEFORE the skeleton is shown"
         )
 
+    def test_switch_embargoes_session_list_renders_during_switch_window(self):
+        # Race-2 (mid-switch variant, Codex re-gate 3): a renderSessionList() that STARTS
+        # after the skeleton shows but before /api/profile/switch sets the new-profile
+        # cookie fetches the OLD profile's rows and would clobber the skeleton. An embargo
+        # (set before the skeleton, lifted right before the switch-owned render and in the
+        # finally) makes _runRenderSessionListRefresh drop ALL payloads during the window.
+        assert "function _setProfileSwitchListEmbargo(" in SESSIONS, "missing embargo setter"
+        # _runRenderSessionListRefresh must drop payloads while embargoed, after the gen guard
+        refresh = SESSIONS[SESSIONS.index("async function _runRenderSessionListRefresh("):]
+        refresh = refresh[: refresh.index("\nasync function _drainRenderSessionListQueue(")]
+        assert "if (_profileSwitchListEmbargo) return;" in refresh, (
+            "_runRenderSessionListRefresh must drop payloads while the profile-switch embargo is on"
+        )
+        body = _switch_body()
+        # embargo set before the skeleton, and lifted (false) before the switch-owned render(s)
+        set_pos = body.find("_setProfileSwitchListEmbargo === 'function') _setProfileSwitchListEmbargo(true)")
+        skel_pos = body.find("showSessionListSkeleton === 'function')")
+        assert set_pos != -1 and set_pos < skel_pos, "embargo must be set before the skeleton"
+        assert body.count("_setProfileSwitchListEmbargo(false)") >= 2, (
+            "embargo must be lifted before the switch-owned render(s) / on failure"
+        )
+        # and guaranteed-lifted in a finally so it can't freeze the sidebar on an early-return/throw
+        assert "finally {" in body and "_setProfileSwitchListEmbargo(false)" in body[body.index("finally {"):], (
+            "embargo must be lifted in the switch's finally as a safety net"
+        )
+
     def test_workspace_tree_generation_token_guards_loaddir(self):
         # Race-1 (CORE): an empty-session profile switch reuses the same session_id, so
         # loadDir()'s session_id guard alone can't reject a stale pre-switch /api/list.

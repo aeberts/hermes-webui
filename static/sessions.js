@@ -3502,6 +3502,18 @@ function _invalidateSessionListRenders(){
 }
 if(typeof window!=='undefined') window._invalidateSessionListRenders = _invalidateSessionListRenders;
 
+// #4671: profile-switch session-list EMBARGO. Point-in-time invalidation isn't enough —
+// a renderSessionList() can START after the skeleton is shown but BEFORE /api/profile/switch
+// returns (the profile cookie is only set by the switch response), so that GET fetches the
+// OLD profile's rows, passes the generation guard, and clobbers the skeleton. While the
+// embargo is on, _runRenderSessionListRefresh drops ALL payloads (none may paint), so only
+// the switch-owned render — which runs after the switch clears the embargo — replaces the
+// skeleton. The switch sets it before showSessionListSkeleton() and clears it immediately
+// before its own renderSessionList() (and in the failure-restore path).
+let _profileSwitchListEmbargo = false;
+function _setProfileSwitchListEmbargo(on){ _profileSwitchListEmbargo = !!on; }
+if(typeof window!=='undefined') window._setProfileSwitchListEmbargo = _setProfileSwitchListEmbargo;
+
 function animateNextSessionListRefresh(options={}){
   _sessionListRefreshAnimationPending = true;
   if(options&&options.enterAll) _sessionListEnterAllAnimationPending = true;
@@ -3828,6 +3840,12 @@ async function _runRenderSessionListRefresh(opts, _gen){
     }
     // Discard stale response — a newer renderSessionList() call superseded us.
     if (_gen !== _renderSessionListGen) return;
+    // #4671: while a profile switch is mid-flight, drop ANY payload — even one whose
+    // generation still matches — because a render that STARTED after the skeleton showed
+    // but before the switch response set the new-profile cookie fetched the OLD profile's
+    // rows. The switch clears the embargo immediately before its own (authoritative)
+    // renderSessionList(), so that render's payload is the first allowed to paint.
+    if (_profileSwitchListEmbargo) return;
     if(deferWhileInteracting&&_isSessionListUserInteracting()){
       _pendingSessionListPayload={gen:_gen,sessData,projData};
       _schedulePendingSessionListApply();
