@@ -3,6 +3,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster profile switching: the backend stops re-reading config and settings on the hot path.** Two behavior-preserving caching wins on the `/api/sessions` path that a profile switch hits cold (#4662, phase 2+3). (1) `reload_config()` no longer re-parses `config.yaml` from disk when the file is unchanged — it now routes through the same mtime-keyed parse cache used elsewhere, removing a ~hundreds-of-ms YAML reparse from each switch while preserving the exact process-env-expansion semantics that keep per-client profile isolation correct. (2) The sidebar session-list response now reads the redaction setting once per response instead of once per conversation row, eliminating a per-row `settings.json` read that grew into a multi-second serialization stage on large session lists. No user-visible behavior change — redaction still applies exactly as before; switching is just quicker. Part of the phased profile-switch performance work. (#4662)
+
 ## [v0.51.599] — 2026-06-23 — Release VF (dedupe live progress reasoning echoes)
 
 ### Fixed
