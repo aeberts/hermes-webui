@@ -117,6 +117,7 @@ def test_datalist_helpers_exist_and_are_called():
 
 def test_i18n_new_keys_in_all_locales():
     required = [
+        "kanban_priority_hint",
         "kanban_skills",
         "kanban_skills_placeholder",
         "kanban_max_runtime_seconds",
