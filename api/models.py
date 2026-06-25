@@ -4877,9 +4877,9 @@ def get_cli_sessions(source_filter=None, *, all_profiles: bool = False) -> list:
                 _cli_sessions_cache_done(cache_key, event)
         try:
             timeout = (
-            _CLI_SESSIONS_CACHE_STALE_WAIT_SECONDS
-            if stale_sessions is not None
-            else _CLI_SESSIONS_CACHE_WAIT_SECONDS
+                _CLI_SESSIONS_CACHE_STALE_WAIT_SECONDS
+                if stale_sessions is not None
+                else _CLI_SESSIONS_CACHE_WAIT_SECONDS
             )
             event.wait(timeout)
         except Exception:
