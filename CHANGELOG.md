@@ -3,6 +3,12 @@
 
 ## [Unreleased]
 
+## [v0.51.688] — 2026-06-26 — Release YR (docs: clarify how WebUI chat runs by default)
+
+### Changed
+
+- **README: clarified that WebUI runs the Hermes agent in-process by default** (reading `HERMES_HOME` directly) rather than connecting to an external Hermes/agent OpenAI-compatible API server, and that `HERMES_API_URL` is only read by the Tasks/cron health probe — it does not route chat. Documents the two supported options for an external endpoint (add it as a custom OpenAI-compatible chat provider, or route chat through a Hermes Gateway via `HERMES_WEBUI_CHAT_BACKEND=gateway`, see `docs/advanced-chat-setup.md`). Addresses a recurring user confusion (#3873). Thanks @sr-dotcom. (#5015)
+
 ## [v0.51.687] — 2026-06-26 — Release YQ (system-health CPU/RAM metrics work on macOS and other non-procfs platforms)
 
 ### Fixed
