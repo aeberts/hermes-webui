@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from api.config import STATE_DIR, load_settings
+from api.config import STATE_DIR, get_config, load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -453,6 +453,49 @@ def is_oidc_auth_enabled() -> bool:
     except Exception as exc:
         logger.debug("Failed to inspect OIDC availability: %s", exc)
         return False
+
+
+def get_oidc_startup_warning() -> str | None:
+    """Return a startup warning when OIDC auth is only partially configured."""
+    try:
+        cfg = get_config()
+        raw = cfg.get("webui_oidc") if isinstance(cfg, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception:
+        logger.debug("Failed to read webui_oidc config", exc_info=True)
+        raw = {}
+
+    def pick(name: str, env_name: str) -> str:
+        env_value = os.getenv(env_name)
+        value = env_value if env_value is not None else raw.get(name)
+        return str(value or "").strip()
+
+    issuer = bool(pick("issuer", "HERMES_WEBUI_OIDC_ISSUER"))
+    client_id = bool(pick("client_id", "HERMES_WEBUI_OIDC_CLIENT_ID"))
+    allow_claim = bool(pick("allow_claim", "HERMES_WEBUI_OIDC_ALLOW_CLAIM"))
+    allow_values = bool(pick("allow_values", "HERMES_WEBUI_OIDC_ALLOW_VALUES"))
+
+    if not any((issuer, client_id, allow_claim, allow_values)):
+        return None
+    if issuer and client_id and allow_claim and allow_values:
+        return None
+
+    missing = []
+    if not issuer:
+        missing.append("issuer")
+    if not client_id:
+        missing.append("client_id")
+    if not allow_claim:
+        missing.append("allow_claim")
+    if not allow_values:
+        missing.append("allow_values")
+
+    joined = ", ".join(missing)
+    return (
+        "Native OIDC login is only partially configured; missing "
+        f"{joined}. The WebUI will not enable OIDC auth until all four fields are set."
+    )
 
 
 def is_auth_enabled() -> bool:

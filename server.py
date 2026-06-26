@@ -584,8 +584,8 @@ def main() -> None:
     if within_container:
         print('[ok] Running within container.', flush=True)
 
-    from api.auth import is_auth_enabled
-    from api.auth_oidc import get_oidc_startup_warning
+    # Security: warn if binding non-loopback without authentication
+    from api.auth import get_oidc_startup_warning, is_auth_enabled
     if HOST not in ('127.0.0.1', '::1', 'localhost') and not is_auth_enabled():
         print(f'[!!] WARNING: Binding to {HOST} with NO PASSWORD SET.', flush=True)
         print(f'     Anyone on the network can access your filesystem and agent.', flush=True)

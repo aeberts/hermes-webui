@@ -246,10 +246,10 @@ def test_oidc_enablement_requires_explicit_allowlist(monkeypatch):
     assert auth_oidc.is_oidc_enabled() is False
 
 def test_oidc_startup_warning_flags_partial_config(monkeypatch):
-    import api.auth_oidc as auth_oidc
+    import api.auth as auth
 
     monkeypatch.setattr(
-        auth_oidc,
+        auth,
         "get_config",
         lambda: {
             "webui_oidc": {
@@ -259,16 +259,16 @@ def test_oidc_startup_warning_flags_partial_config(monkeypatch):
         },
     )
 
-    warning = auth_oidc.get_oidc_startup_warning()
+    warning = auth.get_oidc_startup_warning()
     assert warning is not None
     assert "allow_claim" in warning
     assert "allow_values" in warning
 
 def test_oidc_startup_warning_ignores_complete_config(monkeypatch):
-    import api.auth_oidc as auth_oidc
+    import api.auth as auth
 
     monkeypatch.setattr(
-        auth_oidc,
+        auth,
         "get_config",
         lambda: {
             "webui_oidc": {
@@ -280,7 +280,7 @@ def test_oidc_startup_warning_ignores_complete_config(monkeypatch):
         },
     )
 
-    assert auth_oidc.get_oidc_startup_warning() is None
+    assert auth.get_oidc_startup_warning() is None
 
 def test_validate_id_token_rejects_mismatched_jwk_key_family(monkeypatch):
     import api.auth_oidc as auth_oidc

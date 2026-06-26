@@ -54,34 +54,6 @@ def is_oidc_enabled() -> bool:
         and cfg.get("allow_values")
     )
 
-def get_oidc_startup_warning() -> str | None:
-    cfg = _resolve_oidc_config()
-    issuer = bool(cfg.get("issuer"))
-    client_id = bool(cfg.get("client_id"))
-    allow_claim = bool(cfg.get("allow_claim"))
-    allow_values = bool(cfg.get("allow_values"))
-
-    if not any((issuer, client_id, allow_claim, allow_values)):
-        return None
-    if issuer and client_id and allow_claim and allow_values:
-        return None
-
-    missing = []
-    if not issuer:
-        missing.append("issuer")
-    if not client_id:
-        missing.append("client_id")
-    if not allow_claim:
-        missing.append("allow_claim")
-    if not allow_values:
-        missing.append("allow_values")
-
-    joined = ", ".join(missing)
-    return (
-        "Native OIDC login is only partially configured; missing "
-        f"{joined}. The WebUI will not enable OIDC auth until all four fields are set."
-    )
-
 
 def build_authorization_redirect(
     request_base_url: str,
