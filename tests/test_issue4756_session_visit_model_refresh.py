@@ -177,6 +177,65 @@ def test_session_visit_overlapping_stale_calls_coalesce_to_single_live_rebuild(t
     assert rebuild_count == 1
 
 
+def test_force_refresh_sync_followers_wait_past_legacy_timeout(tmp_path, monkeypatch):
+    import api.config as cfg
+    import threading
+
+    _reset_models_memory_cache(monkeypatch)
+    stale_catalog = _catalog("stale-model")
+    rebuilt_catalog = _catalog("rebuilt-model")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+    cache_path = tmp_path / "models_cache.profile.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    old = time.time() - 600.0
+    os.utime(cache_path, (old, old))
+    fingerprint = {"profile": "demo"}
+    rebuild_count = 0
+    timeout_waits = []
+    original_wait_for = threading.Condition.wait_for
+
+    monkeypatch.setattr(cfg, "_LIVE_REBUILD_BUDGET_SECONDS", 0.0, raising=False)
+    monkeypatch.setattr(cfg, "_get_config_path", lambda: config_path)
+    monkeypatch.setattr(cfg, "_cfg_path", config_path, raising=False)
+    monkeypatch.setattr(cfg, "_cfg_mtime", config_path.stat().st_mtime, raising=False)
+    monkeypatch.setattr(cfg, "_get_models_cache_path", lambda: cache_path)
+    monkeypatch.setattr(cfg, "_load_models_cache_from_disk", lambda: None)
+    monkeypatch.setattr(cfg, "_load_stale_models_cache_from_disk", lambda: stale_catalog)
+    monkeypatch.setattr(cfg, "_models_cache_source_fingerprint", lambda: fingerprint)
+    monkeypatch.setattr(cfg, "_save_models_cache_to_disk", lambda _cache: None)
+
+    def _wait_for(self, predicate, timeout=None):
+        if self is not cfg._cache_build_cv:
+            return original_wait_for(self, predicate, timeout)
+        timeout_waits.append(timeout)
+        if timeout is None:
+            published_at = time.monotonic()
+            cfg._available_models_cache = rebuilt_catalog
+            cfg._available_models_cache_ts = published_at
+            cfg._available_models_live_rebuild_ts = published_at
+            cfg._available_models_cache_source_fingerprint = fingerprint
+            cfg._cache_build_in_progress = False
+            return True
+        if timeout == 60.0:
+            return False
+        return original_wait_for(self, predicate, timeout=timeout)
+
+    def _invoke_models_rebuild(_builder):
+        nonlocal rebuild_count
+        rebuild_count += 1
+        return rebuilt_catalog
+
+    monkeypatch.setattr(cfg, "_cache_build_in_progress", True, raising=False)
+    monkeypatch.setattr(threading.Condition, "wait_for", _wait_for)
+    monkeypatch.setattr(cfg, "_invoke_models_rebuild", _invoke_models_rebuild)
+
+    assert cfg.get_available_models(force_refresh=True) == rebuilt_catalog
+    assert rebuild_count == 0
+    assert None in timeout_waits
+    assert 60.0 not in timeout_waits
+
+
 def test_session_visit_overlapping_stale_calls_do_not_duplicate_over_budget_rebuild(tmp_path, monkeypatch):
     import api.config as cfg
     import threading

@@ -6890,9 +6890,15 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
         # If another thread is already building, wait for its result instead
         # of re-entering the cold path (avoids duplicate 10s zai load_pool calls).
         if should_wait:
+            wait_timeout = 60.0
+            if force_refresh and _LIVE_REBUILD_BUDGET_SECONDS <= 0:
+                # The legacy synchronous path is explicitly unbounded. A forced
+                # refresh follower should keep coalescing behind that live
+                # rebuild instead of giving up after 60s and duplicating it.
+                wait_timeout = None
             _cache_build_cv.wait_for(
                 lambda: not _cache_build_in_progress and _available_models_cache is not None,
-                timeout=60
+                timeout=wait_timeout
             )
             cached = _get_fresh_memory_models_cache(time.monotonic())
             if cached is not None:
@@ -6928,13 +6934,13 @@ def get_available_models(*, prefer_cache: bool = False, force_refresh: bool = Fa
             and force_refresh_started_at is not None
             and _cache_build_in_progress
         ):
-            remaining_budget = 60.0
+            remaining_budget = None
             if _LIVE_REBUILD_BUDGET_SECONDS > 0:
                 remaining_budget = max(
                     0.0,
                     _LIVE_REBUILD_BUDGET_SECONDS - (time.monotonic() - force_refresh_started_at),
                 )
-            if remaining_budget > 0:
+            if remaining_budget is None or remaining_budget > 0:
                 _cache_build_cv.wait_for(
                     lambda: not _cache_build_in_progress,
                     timeout=remaining_budget,
