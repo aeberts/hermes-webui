@@ -16,6 +16,10 @@
 
 - **Three new opt-in appearance skins: GitHub, Codex, and Terracotta.** All are CSS-only, namespaced under `[data-skin]`, and selectable from Settings → Appearance — they change nothing unless you pick them. GitHub uses a restrained graphite + Primer-blue palette; Codex a minimal editor look with a muted sage accent; Terracotta a warm clay accent on a soft neutral background. Thanks @gottipx (GitHub #4634, Codex #4636, Terracotta #4635 — renamed from the originally-proposed name to a descriptive material name).
 
+### Changed
+
+- **New Hermes WebUI brand mark — a cyan→blue caduceus on a navy badge.** The titlebar icon, the empty-state hero logo, and the full favicon family (`favicon.svg`/`favicon-512.svg`/`favicon.ico` + 32/192/512 PNGs + `apple-touch-icon.png`) are regenerated from a single clean vector mark (gradient `#08EBF1 → #3889FD` on a radial-depth navy tile). Five per-skin `.app-titlebar-icon` force-fill overrides (graphite, codex, terracotta, github, geist-contrast) that assumed the old monochrome caduceus were removed so the new full-color badge renders consistently across skins. Verified in dark + light themes.
+
 ### Fixed
 
 - **A live assistant turn no longer briefly blanks out and reappears on a transient stream hiccup.** When the chat `EventSource` fired a transient `error`, `attachLiveStream` made a single 1.5s reconnect probe; if `/api/chat/stream/status` didn't report `active`/`replay_available` at that one instant it fell straight through to the terminal error path — clearing inflight state, nulling the active stream id, pushing a "Connection interrupted" message and re-rendering, which wiped the live message DOM even while the backend was still producing tokens (or the run-journal replay file was a beat from ready). The reconnect probes are now staged (retried on a short schedule) before the stream is declared dead, so a momentary blip recovers in place instead of blanking the turn. Thanks @allenliang2022. (#5122)
