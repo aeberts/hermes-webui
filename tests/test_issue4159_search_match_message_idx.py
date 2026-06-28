@@ -31,7 +31,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlparse
 
-import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
 _OUTLINE_JS = _REPO / "static" / "outline.js"
