@@ -5864,6 +5864,7 @@ def _run_agent_streaming(
     ephemeral=False,
     model_provider=None,
     goal_related=False,
+    moa_config=None,
 ):
     """Run agent in background thread, writing SSE events to STREAMS[stream_id].
 
@@ -7613,13 +7614,19 @@ def _run_agent_streaming(
                 _agent_msg_text = "\n\n".join([*_process_notifications, msg_text]).strip()
             user_message = _build_native_multimodal_message(workspace_ctx, _agent_msg_text, attachments, workspace, cfg=_cfg)
             _persistent_state_before = _persistent_state_snapshot(_profile_home)
-            result = agent.run_conversation(
+            _run_conversation_kwargs = dict(
                 user_message=user_message,
                 system_message=workspace_system_msg,
                 conversation_history=_sanitize_messages_for_api(_previous_context_messages, cfg=_cfg),
                 task_id=session_id,
                 persist_user_message=msg_text,
             )
+            # Only pass moa_config when a /moa override is actually active, so a
+            # normal send never trips a TypeError on an older hermes-agent whose
+            # run_conversation() predates the moa_config kwarg.
+            if moa_config is not None:
+                _run_conversation_kwargs["moa_config"] = moa_config
+            result = agent.run_conversation(**_run_conversation_kwargs)
             # #4729: the run is done — flush any reasoning tail still in the coalescing
             # buffer (the agent never calls reasoning_callback(None), and a turn can end on
             # reasoning with no trailing token/tool boundary to trigger a flush) so the last
@@ -7993,13 +8000,16 @@ def _run_agent_streaming(
                             _self_healed = True
                             _token_sent = False
                             try:
-                                _heal_result = agent.run_conversation(
+                                _heal_kwargs = dict(
                                     user_message=user_message,
                                     system_message=workspace_system_msg,
                                     conversation_history=_sanitize_messages_for_api(_previous_context_messages, cfg=_cfg),
                                     task_id=session_id,
                                     persist_user_message=msg_text,
                                 )
+                                if moa_config is not None:
+                                    _heal_kwargs["moa_config"] = moa_config
+                                _heal_result = agent.run_conversation(**_heal_kwargs)
                                 _heal_all_msgs = _heal_result.get('messages') or []
                                 _heal_ok = _has_new_assistant_reply(_heal_all_msgs, _prev_len) or _token_sent
                             except Exception as _retry_exc:
@@ -9049,13 +9059,16 @@ def _run_agent_streaming(
                     # Retry the conversation
                     _token_sent = False
                     try:
-                        _heal_result = _heal_agent.run_conversation(
+                        _heal_kwargs2 = dict(
                             user_message=user_message,
                             system_message=workspace_system_msg,
                             conversation_history=_sanitize_messages_for_api(_previous_context_messages, cfg=_cfg),
                             task_id=session_id,
                             persist_user_message=msg_text,
                         )
+                        if moa_config is not None:
+                            _heal_kwargs2["moa_config"] = moa_config
+                        _heal_result = _heal_agent.run_conversation(**_heal_kwargs2)
                         # Retry succeeded — persist the result normally
                         if s is not None:
                             if _checkpoint_stop is not None:
