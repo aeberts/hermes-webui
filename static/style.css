@@ -5124,6 +5124,16 @@ main.main > #mainPlugin{display:none;}
 .extension-installed-meta code{font-family:var(--font-mono);font-size:11px;color:var(--text);overflow-wrap:anywhere;word-break:break-word;}
 .extension-toggle-btn{white-space:nowrap;flex:0 0 auto;}
 .extension-toggle-btn:disabled{opacity:.55;cursor:not-allowed;}
+.extension-settings-box{margin-top:8px;padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg,var(--sidebar-bg));}
+.extension-settings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px;}
+.extension-settings-title{font-size:12px;font-weight:700;color:var(--text);}
+.extension-settings-note,.extension-settings-empty,.extension-setting-desc{font-size:11px;color:var(--muted);line-height:1.4;}
+.extension-settings-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;}
+.extension-setting-field label{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:var(--muted);}
+.extension-setting-field input,.extension-setting-field select{min-height:30px;border:1px solid var(--border2);border-radius:7px;background:var(--bg);color:var(--text);padding:4px 8px;font-size:12px;}
+.extension-setting-check{flex-direction:row!important;align-items:center;font-size:12px!important;color:var(--text)!important;}
+.extension-setting-check input{min-height:auto;padding:0;}
+.extension-settings-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px;}
 .extension-sidecar-list{display:flex;flex-direction:column;gap:8px;}
 .extension-sidecar-row{padding:9px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);min-width:0;}
 .extension-sidecar-row-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;}

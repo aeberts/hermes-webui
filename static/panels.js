@@ -8168,6 +8168,64 @@ function _extensionEntryBadge(entry){
   return `<span class="extension-status-badge ${cls}">${esc(_extensionEntryStatusLabel(entry))}</span>`;
 }
 
+function _configureExtensionSettingsFromStatus(data){
+  if(!window.HermesExtensionSettings||!data||!Array.isArray(data.extensions)) return;
+  window.HermesExtensionSettings.configure({extensions:data.extensions});
+}
+
+function _extensionSettingsFieldHtml(field,value){
+  const key=String(field&&field.key||'');
+  const type=String(field&&field.type||'');
+  const label=String(field&&field.label||key);
+  const desc=String(field&&field.description||'');
+  const dataAttrs=`data-extension-setting-input="${esc(key)}" data-extension-setting-type="${esc(type)}"`;
+  let control='';
+  if(type==='boolean'){
+    control=`<label class="extension-setting-check"><input type="checkbox" ${dataAttrs}${value?' checked':''}> <span>${esc(label)}</span></label>`;
+  }else if(type==='number'||type==='integer'){
+    const step=type==='integer'?'1':'any';
+    control=`<label><span>${esc(label)}</span><input type="number" step="${step}" ${dataAttrs} value="${esc(String(value??''))}"></label>`;
+  }else if(type==='enum'){
+    const options=Array.isArray(field.options)?field.options:[];
+    control=`<label><span>${esc(label)}</span><select ${dataAttrs}>${options.map(option=>{
+      const optionValue=String(option&&option.value||'');
+      const optionLabel=String(option&&option.label||optionValue);
+      return `<option value="${esc(optionValue)}"${optionValue===value?' selected':''}>${esc(optionLabel)}</option>`;
+    }).join('')}</select></label>`;
+  }else{
+    control=`<label><span>${esc(label)}</span><input type="text" ${dataAttrs} value="${esc(String(value??''))}"></label>`;
+  }
+  return `<div class="extension-setting-field">${control}${desc?`<div class="extension-setting-desc">${esc(desc)}</div>`:''}</div>`;
+}
+
+function _extensionSettingsControls(entry){
+  const id=(entry&&entry.id)||'';
+  const schema=Array.isArray(entry&&entry.settings_schema)?entry.settings_schema:[];
+  const storageOwned=!!(entry&&entry.storage_owned);
+  if(!storageOwned){
+    return '<div class="extension-settings-empty">No extension-owned browser storage permission.</div>';
+  }
+  const settingsApi=window.HermesExtensionSettings&&id?window.HermesExtensionSettings.settingsForExtension(id):null;
+  const values=settingsApi?settingsApi.values:{};
+  const fields=schema.length
+    ? schema.map(field=>_extensionSettingsFieldHtml(field,values[field.key])).join('')
+    : '<div class="extension-settings-empty">No configurable settings declared.</div>';
+  return `<div class="extension-settings-box">
+    <div class="extension-settings-head">
+      <div>
+        <div class="extension-settings-title">Browser-local extension settings</div>
+        <div class="extension-settings-note">Settings and extension-owned storage stay in this browser. Do not store secrets here.</div>
+      </div>
+    </div>
+    <div class="extension-settings-fields">${fields}</div>
+    <div class="extension-settings-actions">
+      <button class="sm-btn" type="button" data-extension-settings-save="${esc(id)}"${schema.length?'':' disabled aria-disabled="true"'}>Save settings</button>
+      <button class="sm-btn" type="button" data-extension-settings-reset="${esc(id)}"${schema.length?'':' disabled aria-disabled="true"'}>Reset settings</button>
+      <button class="sm-btn" type="button" data-extension-storage-clear="${esc(id)}">Clear extension storage</button>
+    </div>
+  </div>`;
+}
+
 function _extensionInstalledList(extensions,extensionDirConfigured){
   const list=Array.isArray(extensions)?extensions:[];
   if(!list.length){
@@ -8192,6 +8250,7 @@ function _extensionInstalledList(extensions,extensionDirConfigured){
           ${_extensionEntryBadge(entry)}
         </div>
         <div class="extension-installed-meta"><code>${esc(id)}</code><span>${esc(note)}</span></div>
+        ${_extensionSettingsControls(entry)}
       </div>
       <button class="sm-btn extension-toggle-btn" type="button" data-extension-toggle-id="${esc(id)}" data-extension-next-enabled="${nextEnabled}"${disabledAttr}>${esc(buttonText)}</button>
     </div>`;
@@ -8374,6 +8433,7 @@ function _renderExtensionsPanel(data,seq){
   const copyBtn=$('extensionsCopyDiagnosticsBtn');
   if(!target) return;
   _extensionsStatusData=data||null;
+  _configureExtensionSettingsFromStatus(data);
   if(copyBtn) copyBtn.disabled=!data;
   const manifest=(data&&data.manifest)||{};
   const counts=(data&&data.counts)||{};
@@ -8454,6 +8514,7 @@ function _renderExtensionsPanel(data,seq){
     </div>
   `;
   _bindExtensionToggleButtons(target);
+  _bindExtensionSettingsButtons(target);
   _monitorExtensionSidecars(sidecars,seq);
 }
 
@@ -8481,6 +8542,75 @@ async function handleExtensionToggle(btn){
     btn.textContent=previousText;
     showToast('Failed to update extension: '+(e&&e.message?e.message:String(e)));
   }
+}
+
+function _readExtensionSettingsForm(row){
+  const values={};
+  row.querySelectorAll('[data-extension-setting-input]').forEach(input=>{
+    const key=input.dataset.extensionSettingInput||'';
+    const type=input.dataset.extensionSettingType||'';
+    if(!key) return;
+    if(type==='boolean') values[key]=!!input.checked;
+    else if(type==='integer') values[key]=Number.parseInt(input.value,10);
+    else if(type==='number') values[key]=Number.parseFloat(input.value);
+    else values[key]=input.value;
+  });
+  return values;
+}
+
+function _fillExtensionSettingsForm(row,id){
+  if(!window.HermesExtensionSettings) return;
+  const values=window.HermesExtensionSettings.settingsForExtension(id).values;
+  row.querySelectorAll('[data-extension-setting-input]').forEach(input=>{
+    const key=input.dataset.extensionSettingInput||'';
+    const type=input.dataset.extensionSettingType||'';
+    const value=values[key];
+    if(type==='boolean') input.checked=!!value;
+    else input.value=value??'';
+  });
+}
+
+function _bindExtensionSettingsButtons(root){
+  if(!root) return;
+  root.querySelectorAll('[data-extension-settings-save]').forEach(btn=>{
+    btn.addEventListener('click',()=>handleExtensionSettingsSave(btn));
+  });
+  root.querySelectorAll('[data-extension-settings-reset]').forEach(btn=>{
+    btn.addEventListener('click',()=>handleExtensionSettingsReset(btn));
+  });
+  root.querySelectorAll('[data-extension-storage-clear]').forEach(btn=>{
+    btn.addEventListener('click',()=>handleExtensionStorageClear(btn));
+  });
+}
+
+function handleExtensionSettingsSave(btn){
+  const id=btn&&btn.dataset.extensionSettingsSave;
+  const row=btn&&btn.closest('[data-extension-id]');
+  if(!id||!row||!window.HermesExtensionSettings) return;
+  const api=window.HermesExtensionSettings.settingsForExtension(id);
+  const result=api.setAll(_readExtensionSettingsForm(row));
+  if(!result.ok){
+    showToast('Extension settings contain invalid values.');
+    return;
+  }
+  _fillExtensionSettingsForm(row,id);
+  showToast('Extension settings saved in this browser.');
+}
+
+function handleExtensionSettingsReset(btn){
+  const id=btn&&btn.dataset.extensionSettingsReset;
+  const row=btn&&btn.closest('[data-extension-id]');
+  if(!id||!row||!window.HermesExtensionSettings) return;
+  window.HermesExtensionSettings.settingsForExtension(id).reset();
+  _fillExtensionSettingsForm(row,id);
+  showToast('Extension settings reset in this browser.');
+}
+
+function handleExtensionStorageClear(btn){
+  const id=btn&&btn.dataset.extensionStorageClear;
+  if(!id||!window.HermesExtensionSettings) return;
+  window.HermesExtensionSettings.storageForExtension(id).clear();
+  showToast('Extension storage cleared in this browser.');
 }
 
 async function loadExtensionsPanel(opts){
@@ -8702,6 +8832,7 @@ async function loadExtensionsGallery(){
 function _renderExtensionsGallery(entries,statusData){
   const galleryEl=$('extensionsGallery');
   const installedEl=$('extensionsInstalled');
+  _configureExtensionSettingsFromStatus(statusData);
   const installedIds=new Set();
   if(statusData&&statusData.gallery_installed){
     Object.keys(statusData.gallery_installed).forEach(id=>installedIds.add(id));
@@ -8711,11 +8842,14 @@ function _renderExtensionsGallery(entries,statusData){
   }
   if(!Array.isArray(entries)||entries.length===0){
     if(galleryEl) galleryEl.innerHTML='<div class="extensions-empty">No extensions found in the registry.</div>';
-    if(installedEl) installedEl.innerHTML='<div class="extensions-empty">No extensions installed from the gallery.</div>';
+    if(installedEl){
+      installedEl.innerHTML=_extensionInstalledList(statusData&&statusData.extensions,!!(statusData&&statusData.extension_dir_configured));
+      _bindExtensionToggleButtons(installedEl);
+      _bindExtensionSettingsButtons(installedEl);
+    }
     return;
   }
   const galleryCards=[];
-  const installedCards=[];
   for(const entry of entries){
     const id=esc(String(entry.id||''));
     const name=esc(String(entry.name||entry.id||''));
@@ -8754,10 +8888,13 @@ function _renderExtensionsGallery(entries,statusData){
       <div class="extension-gallery-actions">${actionBtn}</div>
     </div>`;
     galleryCards.push(card);
-    if(isInstalled) installedCards.push(card);
   }
   if(galleryEl) galleryEl.innerHTML=galleryCards.length?galleryCards.join(''):'<div class="extensions-empty">No extensions found.</div>';
-  if(installedEl) installedEl.innerHTML=installedCards.length?installedCards.join(''):'<div class="extensions-empty">No extensions installed from the gallery.</div>';
+  if(installedEl){
+    installedEl.innerHTML=_extensionInstalledList(statusData&&statusData.extensions,!!(statusData&&statusData.extension_dir_configured));
+    _bindExtensionToggleButtons(installedEl);
+    _bindExtensionSettingsButtons(installedEl);
+  }
   _bindExtensionGalleryButtons(entries);
 }
 

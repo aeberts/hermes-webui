@@ -1452,7 +1452,7 @@
               </div>
               <div class="settings-field extensions-trust-note" id="extensionsTrustModel">
                 <label>Trust model</label>
-                <div>Extensions run in the WebUI browser origin and can access the same authenticated APIs as this session. Only load trusted local extension directories; disabling an extension takes effect after reload for already-injected assets.</div>
+                <div>Extensions run in the WebUI browser origin and can access the same authenticated APIs as this session. Settings and extension-owned storage are browser-local and not for secrets. Only load trusted local extension directories; disabling an extension takes effect after reload for already-injected assets.</div>
               </div>
               <div id="extensionsDiagnostics" class="extensions-diagnostics" aria-live="polite">
                 <div class="extensions-loading">Loading extension diagnostics…</div>
@@ -1682,6 +1682,7 @@
 <script src="static/sessions.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/commands.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/messages.js?v=__WEBUI_VERSION__" defer></script>
+<script src="static/extension_settings.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/panels.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/onboarding.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/boot.js?v=__WEBUI_VERSION__" defer></script>
