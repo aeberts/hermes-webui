@@ -11262,12 +11262,26 @@ def handle_get(handler, parsed) -> bool:
         )
 
         active_profile_name = get_active_profile_name()
+        # Resolve the ACTIVE PROFILE's configured workspace so a cold boot with a
+        # profile cookie shows the right composer workspace chip on a blank
+        # new-chat page (#5169). get_last_workspace() is already profile-scoped
+        # (server.py sets the per-request profile from the hermes_profile cookie
+        # before this handler runs) and resolves in the same priority order as
+        # POST /api/profile/switch. Fail open: a resolution error must never 500
+        # this endpoint (boot depends on it) — the chip just falls back to the
+        # global default as before.
+        try:
+            _profile_default_workspace = get_last_workspace()
+        except Exception:
+            logger.debug("Failed to resolve profile default workspace for /api/profile/active", exc_info=True)
+            _profile_default_workspace = None
         return j(
             handler,
             {
                 "name": active_profile_name,
                 "path": str(get_active_hermes_home()),
                 "is_default": _is_root_profile(active_profile_name),
+                "default_workspace": _profile_default_workspace,
             },
         )
 
