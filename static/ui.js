@@ -4067,9 +4067,10 @@ function _recentMessageWheelIntent(){
   return performance.now()-_lastMessageWheelIntentMs<MESSAGE_WHEEL_INTENT_SUPPRESS_MS;
 }
 function _recentMessageScrollIntent(){
+  // This manual-reader snapshot signal intentionally excludes the raw
+  // touch/key recency helpers: those also record near-tail events for render
+  // artifact suppression. Only this timestamp is guarded by bottom distance.
   return performance.now()-_lastMessageScrollIntentMs<MESSAGE_WHEEL_INTENT_SUPPRESS_MS
-    || (typeof _recentMessageTouchScrollIntent==='function'&&_recentMessageTouchScrollIntent())
-    || (typeof _recentMessageKeyScrollIntent==='function'&&_recentMessageKeyScrollIntent())
     || (typeof _scrollbarDragActive!=='undefined'&&!!_scrollbarDragActive);
 }
 // #4970 review (greptile P1): true when the reader recently used the keyboard to
@@ -4109,7 +4110,7 @@ function _recordNonMessageScrollIntent(e){
   // suppression consults _recentMessageWheelIntent() so it cannot swallow a real
   // gentle scroll-up. This does NOT unpin on its own — only the <-30 branch and
   // the scroll listener's movedUp branch flip _messageUserUnpinned.
-  if(typeof e.deltaY==='number'&&e.deltaY!==0){
+  if(e.type==='touchmove'||(typeof e.deltaY==='number'&&e.deltaY!==0)){
     const bottomDistance=el.scrollHeight-el.scrollTop-el.clientHeight;
     if(bottomDistance>120) _lastMessageScrollIntentMs=performance.now();
   }
@@ -4351,7 +4352,10 @@ if(typeof window!=='undefined'){
     // Count only when the message pane itself is the scroll target: it is focused,
     // contains the focus, or the pointer is over it (keyboard scroll w/o focus).
     if(a===el||el.contains(a)||el.matches(':hover')){
-      _lastMessageKeyScrollIntentMs=performance.now();
+      const now=performance.now();
+      _lastMessageKeyScrollIntentMs=now;
+      const bottomDistance=el.scrollHeight-el.scrollTop-el.clientHeight;
+      if(bottomDistance>120) _lastMessageScrollIntentMs=now;
     }
   },{capture:true,passive:true});
   let _scrollRaf=0;
