@@ -68,6 +68,19 @@ def test_hard_refresh_hydrates_saved_session_model_before_revealing_model_chip()
     )
 
 
+def test_pwa_new_chat_launch_does_not_block_first_paint_on_model_catalog():
+    boot_js = Path("static/boot.js").read_text(encoding="utf-8")
+    launch_marker = "if(pwaLaunchAction==='new-chat'){"
+    assert launch_marker in boot_js
+    launch_branch = boot_js[boot_js.index(launch_marker) : boot_js.index("const savedLocal=localStorage.getItem", boot_js.index(launch_marker))]
+    assert "await newSession(true);" in launch_branch
+    assert "await _startBootModelDropdown();" not in launch_branch
+    assert "Promise.resolve(_startBootModelDropdown()).catch(()=>{})" in launch_branch
+    assert launch_branch.index("Promise.resolve(_startBootModelDropdown()).catch(()=>{})") < launch_branch.index("S._bootReady=true;"), (
+        "PWA new-chat launches should kick model hydration in the background before revealing the empty chat"
+    )
+
+
 def test_hard_refresh_injects_missing_active_session_model_option():
     boot_js = Path("static/boot.js").read_text(encoding="utf-8")
     marker = "if(!applied&&sessionModelState&&typeof _ensureModelOptionInDropdown==='function')"

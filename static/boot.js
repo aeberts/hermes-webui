@@ -2804,7 +2804,14 @@ window._applyTitlebarProfileVisibility=_applyTitlebarProfileVisibility;
   if(pwaLaunchAction==='new-chat'){
     try{
       await newSession(true);
-      if(S.session) await _startBootModelDropdown();
+      // New-chat PWA launches need the empty conversation visible immediately.
+      // Boot model hydration can take several seconds when /api/models falls
+      // into a cold provider-catalog rebuild; it is already safe to finish in
+      // the background because newSession() posted the configured default and
+      // rendered the session's authoritative model/provider.
+      if(S.session){
+        try{Promise.resolve(_startBootModelDropdown()).catch(()=>{});}catch(_){}
+      }
       S._bootReady=true;
       syncTopbar();syncWorkspacePanelState();await renderSessionList();if(typeof startGatewaySSE==='function')startGatewaySSE();return;
     }catch(e){console.warn('[pwa] new-chat launch action failed', e);}
