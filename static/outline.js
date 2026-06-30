@@ -139,16 +139,26 @@ function _jumpToMessage(rawIdx) {
 // / #4159). This path force-loads the full history first (so _oldestIdx == 0 and
 // local == full), then resolves; if already fully loaded it translates
 // full -> local via _oldestIdx.
-function _jumpToFullSessionMessage(fullIdx) {
-  const sid = _currentSid();
+function _jumpToFullSessionMessage(fullIdx, targetSid) {
+  const sid = targetSid || _currentSid();
   if (!sid || !Number.isInteger(fullIdx) || fullIdx < 0) return;
 
   function _resolveAndFlash() {
+    // Guard against a session switch between click and resolve (#5106): only act
+    // if the intended session is still the active one.
+    if (!S.session || S.session.session_id !== sid) return false;
     const off = (typeof _oldestIdx !== 'undefined' && Number.isFinite(Number(_oldestIdx))) ? Number(_oldestIdx) : 0;
     const localIdx = fullIdx - off;
     if (localIdx < 0) return false;
-    const r = document.getElementById('msg-user-' + localIdx);
-    if (r) { r.scrollIntoView({ block: 'center', behavior: 'smooth' }); _flashRow(r); return true; }
+    // User-message rows carry msg-user-<localIdx>; assistant rows render as
+    // .assistant-segment[data-msg-idx=<localIdx>] with no msg-user id. A content
+    // search can match EITHER role, so resolve both (#5106 Codex follow-up).
+    let target = document.getElementById('msg-user-' + localIdx);
+    if (!target) {
+      const seg = document.querySelector('.assistant-segment[data-msg-idx="' + localIdx + '"]');
+      if (seg) target = seg.closest('.assistant-turn') || seg;
+    }
+    if (target) { target.scrollIntoView({ block: 'center', behavior: 'smooth' }); _flashRow(target); return true; }
     return false;
   }
 
@@ -169,7 +179,6 @@ function _jumpToFullSessionMessage(fullIdx) {
       _expandOutlineRenderWindow();
       if (typeof renderMessages === 'function') renderMessages({ preserveScroll: true });
       window.setTimeout(function() {
-        if (!S.session || S.session.session_id !== sid) return;
         _resolveAndFlash();
       }, 120);
     })

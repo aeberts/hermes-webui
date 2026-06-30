@@ -200,3 +200,23 @@ def test_full_session_jump_translates_full_to_local_and_forceloads():
     assert "'msg-user-' + fullIdx" not in body, (
         "must resolve the LOCAL index, never the raw full-session index, as the DOM id"
     )
+
+
+def test_full_session_jump_resolves_assistant_segments_and_guards_session():
+    """#5106 Codex follow-up: a content hit on an ASSISTANT message must jump too
+    (assistant rows have no msg-user id — they render as
+    .assistant-segment[data-msg-idx]), and a session-switch race must not apply
+    one session's match index to another (the helper takes a targetSid + re-checks
+    the active session before scrolling)."""
+    src = _OUTLINE_JS.read_text()
+    start = src.index("function _jumpToFullSessionMessage(")
+    body = src[start:start + 2400]
+    # assistant-segment fallback
+    assert '.assistant-segment[data-msg-idx="' in body
+    # session-switch guard: helper accepts targetSid and re-checks active session
+    assert "targetSid" in body
+    assert "S.session.session_id !== sid" in body
+    # caller passes the clicked session id
+    sess = _SESSIONS_JS.read_text()
+    assert "_jumpToFullSessionMessage(_jumpIdx, _jumpSid)" in sess
+    assert "_jumpSid=s.session_id" in sess

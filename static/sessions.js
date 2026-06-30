@@ -7429,7 +7429,8 @@ function renderSessionListFromCache(){
           // opening at the latest message, so this stays backward compatible.
           if(s.match_type==='content' && Number.isInteger(s.match_message_idx) && typeof window._jumpToFullSessionMessage==='function'){
             const _jumpIdx=s.match_message_idx;
-            window.setTimeout(()=>{ try{ window._jumpToFullSessionMessage(_jumpIdx); }catch(_e){} }, 0);
+            const _jumpSid=s.session_id;
+            window.setTimeout(()=>{ try{ window._jumpToFullSessionMessage(_jumpIdx, _jumpSid); }catch(_e){} }, 0);
           }
           if(typeof closeMobileSidebar==='function')closeMobileSidebar();
         }finally{
