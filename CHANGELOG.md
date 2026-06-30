@@ -35,6 +35,8 @@
 
 ### Fixed
 
+- **Opt-in per-project "New conversation" shortcuts in the sidebar.** A new default-off setting ("Show per-project new-conversation buttons") adds a small `+` button to each sidebar project chip that starts a conversation already assigned to that project. Off by default — the sidebar is unchanged unless you enable it. Thanks @rodboev. (#5002, #4676)
+
 - **WebUI now supports an OpenAI-compatible TTS backend.** A new "OpenAI TTS (server)" option in Settings → TTS Engine (alongside Browser / Edge / ElevenLabs) routes text-to-speech through an OpenAI-compatible `/v1/audio/speech` endpoint for both the voice-mode auto-read and the per-message Listen button. The endpoint is SSRF-hardened: the configured base URL is rejected if it carries credentials or resolves to a private / loopback / link-local / reserved / multicast address (only public hosts and an explicit localhost-over-http dev case are allowed), and the request uses a no-redirect opener so an upstream redirect can't bounce to an internal target or leak the `Authorization` bearer; content-type and response-size caps apply and the key is resolved server-side. Default engine is unchanged. Thanks @rodboev. (#5079, #4982)
 
 - **The Kanban "New task" modal now exposes skills, max runtime, and parent dependencies.** The WebUI task creator reaches parity with the CLI Kanban fields: a Skills input (comma-separated, e.g. `python,git`), a Max runtime (seconds) field (empty = unlimited), and a Parent dependencies (task ID) field. Max-runtime input is validated (`/^[1-9]\d*$/`) with an inline localized error so a junk value can't silently become 1 or unlimited; all fields are XSS-safe. Thanks @rodboev. (#4881, #4470)
